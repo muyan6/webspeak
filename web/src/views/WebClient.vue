@@ -10,7 +10,12 @@
             <small>{{ t('browserWorkspace') }}</small>
           </div>
         </div>
-        <div class="header-tools"><div class="header-note"><span class="tiny-dot"></span> {{ t('secureGateway') }}</div><a class="github-button" href="https://github.com/EchoSixHIYA/WebSpeak-client-for-TeamSpeak" target="_blank" rel="noreferrer" :title="t('githubRepository')" :aria-label="t('githubRepository')"><Icon name="github" :size="18" /><span>{{ t('githubRepository') }}</span></a><button type="button" class="qq-button" :title="t('qqGroup')" :aria-label="t('qqGroup')" aria-haspopup="dialog" @click="qqModalOpen = true"><Icon name="qq" :size="18" /><span class="qq-label">{{ t('qqGroup') }}</span></button><a class="bilibili-button" href="https://space.bilibili.com/25414873" target="_blank" rel="noreferrer" :title="t('bilibiliProfile')" :aria-label="t('bilibiliProfile')"><span class="bilibili-glyph">B</span><span class="bilibili-label">{{ t('bilibiliProfile') }}</span></a><span class="version-badge" :title="`${t('currentVersion')}: v${appVersion}`" :aria-label="`${t('currentVersion')}: v${appVersion}`">v{{ appVersion }}</span><a class="changelog-button" href="https://github.com/EchoSixHIYA/WebSpeak-client-for-TeamSpeak/blob/master/CHANGELOG.md" target="_blank" rel="noreferrer" :title="t('viewChangelog')" :aria-label="t('viewChangelog')"><Icon name="clock" :size="16" /><span>{{ t('viewChangelog') }}</span></a><a class="guide-button" href="/admin" :title="t('adminConsole')" :aria-label="t('adminConsole')"><Icon name="settings" :size="15" /><span>{{ t('adminConsole') }}</span></a><button type="button" class="header-action theme-toggle" :title="themeLabel" :aria-label="themeLabel" @click="cycleTheme"><Icon :name="themeIcon" :size="17" /></button><LanguageSwitcher v-model="language" class="join-language-switcher" :menu-label="t('languageMenu')" @change="persistLanguage" /></div>
+        <div class="header-tools">
+          <div class="header-note"><span class="tiny-dot"></span> {{ t('secureGateway') }}</div>
+          <a class="guide-button" href="/admin" :title="t('adminConsole')" :aria-label="t('adminConsole')"><Icon name="settings" :size="15" /><span>{{ t('adminConsole') }}</span></a>
+          <button type="button" class="header-action theme-toggle" :title="themeLabel" :aria-label="themeLabel" @click="cycleTheme"><Icon :name="themeIcon" :size="17" /></button>
+          <LanguageSwitcher v-model="language" class="join-language-switcher" :menu-label="t('languageMenu')" @change="persistLanguage" />
+        </div>
       </header>
 
       <main class="join-content">
@@ -80,17 +85,6 @@
       <footer class="join-footer">
         <span>WebSpeak</span><span class="footer-separator">·</span><span>{{ t('teamSpeakClient') }}</span><span class="footer-spacer"></span><button type="button" class="clear-local-button" @click="clearBrowserData">{{ t('clearLocalData') }}</button><span class="footer-separator">·</span><span>{{ t('browserSupport') }}</span>
       </footer>
-
-      <!-- QQ community modal -->
-      <div v-if="qqModalOpen" class="modal-backdrop qq-modal-backdrop" @click.self="qqModalOpen = false">
-        <section class="qq-modal-card" role="dialog" aria-modal="true" :aria-labelledby="'qq-group-title'">
-          <button type="button" class="qq-modal-close" :aria-label="t('close')" :title="t('close')" @click="qqModalOpen = false"><Icon name="close" :size="19" /></button>
-          <div class="qq-modal-heading"><span class="card-kicker">{{ t('qqGroup') }}</span><h2 id="qq-group-title">{{ t('qqGroup') }}</h2></div>
-          <img class="qq-qr-image" src="/qq-group-qr.jpg" :alt="t('qqGroupQrAlt')" />
-          <p class="qq-direct-join">{{ t('qqJoinDirect') }}</p>
-          <a class="qq-join-link" :href="qqJoinUrl" :aria-label="t('joinQqGroup')" target="_blank" rel="noreferrer">{{ qqJoinUrl }}</a>
-        </section>
-      </div>
     </section>
 
     <!-- Connected application shell -->
@@ -262,7 +256,7 @@
     <!-- Protected channel password modal -->
     <div v-if="channelPasswordDialog.open" class="modal-backdrop channel-password-backdrop" @click.self="cancelChannelPassword">
       <section class="channel-password-modal" role="dialog" aria-modal="true" :aria-labelledby="'channel-password-title'" @click.stop>
-        <button type="button" class="qq-modal-close" :aria-label="t('close')" :title="t('close')" @click="cancelChannelPassword"><Icon name="close" :size="19" /></button>
+        <button type="button" class="modal-close-button" :aria-label="t('close')" :title="t('close')" @click="cancelChannelPassword"><Icon name="close" :size="19" /></button>
         <div class="channel-password-icon"><Icon name="lock" :size="22" /></div>
         <span class="card-kicker">{{ t('channelPasswordPrompt') }}</span>
         <h2 id="channel-password-title">{{ t('channelPasswordTitle') }}</h2>
@@ -433,7 +427,6 @@ const initialized = ref(false);
 const siteName = ref("WebSpeak");
 const welcomeTextZh = ref("");
 const welcomeTextEn = ref("");
-const appVersion = ref("0.1.2");
 const browserError = ref("");
 const serverConfigLoading = ref(true);
 const memberQuery = ref("");
@@ -441,8 +434,6 @@ const messageDraft = ref("");
 const selectedChannelId = ref("");
 const settingsOpen = ref(false);
 const channelPasswordDialog = reactive({ open: false, channelId: "", password: "", error: "", submitting: false });
-const qqModalOpen = ref(false);
-const qqJoinUrl = "http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=yhumUMDD9PmyYFWdXWUb_x7hM5trFQY8&authKey=Pw3HBGT7GwMinTQnuFGfnpf0aRSzXOJKcAiujVP1%2BXMpjheAKrncTRivicBJxpjV&noverify=0&group_code=869500475";
 const audioSettingsError = ref("");
 const toast = ref("");
 const chatListEl = ref<HTMLElement | null>(null);
@@ -941,7 +932,6 @@ async function loadPublicConfig() {
     const response = await fetch("/api/public-config", { headers: { accept: "application/json" } });
     if (!response.ok) return;
     const config = await response.json() as { version?: unknown; initialized?: unknown; siteName?: unknown; welcomeText?: unknown; welcomeTextEn?: unknown; accessMode?: unknown; target?: unknown };
-    if (typeof config.version === "string" && config.version.trim()) appVersion.value = config.version.trim();
     initialized.value = config.initialized === true;
     if (typeof config.siteName === "string" && config.siteName.trim()) siteName.value = config.siteName.trim();
     if (typeof config.welcomeText === "string") welcomeTextZh.value = config.welcomeText;
@@ -1197,12 +1187,6 @@ function stopWhisperTalk(): void {
 .brand-lockup strong span { color: #24312f; font-weight: 500; }
 .brand-lockup small { display: block; margin-top: 2px; color: #7b8885; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .header-tools { display: flex; align-items: center; gap: 17px; }
-.github-button { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 13px; color: #fff; background: #1f2d2b; border: 1px solid #1f2d2b; border-radius: 9px; box-shadow: 0 5px 12px rgba(31,45,43,.16); font-size: 12px; font-weight: 800; text-decoration: none; transition: .18s; }
-.github-button:hover { color: #fff; background: #006a64; border-color: #006a64; box-shadow: 0 7px 16px rgba(0,106,100,.2); transform: translateY(-1px); }
-.github-button .ui-icon { flex: 0 0 auto; }
-.version-badge { display: inline-flex; align-items: center; min-height: 30px; padding: 0 9px; color: #006a64; background: #e7f4f1; border: 1px solid #cfe9e4; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; }
-.changelog-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 0 10px; color: #006a64; background: #f2f8f6; border: 1px solid #dcebe7; border-radius: 8px; font-size: 11px; font-weight: 700; text-decoration: none; transition: .18s; }
-.changelog-button:hover { color: #fff; background: #006a64; border-color: #006a64; }
 .header-note { display: flex; align-items: center; gap: 8px; color: #71807c; font-size: 12px; }
 .language-switch { min-width: 50px; min-height: 28px; padding: 0 9px; color: #006a64; background: #e2f2ef; border: 1px solid #c8e6e1; border-radius: 7px; font-size: 10px; font-weight: 700; cursor: pointer; transition: .18s; }
 .language-switch:hover { color: #fff; background: #006a64; border-color: #006a64; }
@@ -1285,7 +1269,7 @@ function stopWhisperTalk(): void {
 
 .member-panel { min-width: 0; padding: 26px 16px; color: #2c3935; background: #fbfcfc; border-left: 1px solid #eef2f0; }.member-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; }.member-panel-heading h2 { margin: 5px 0 0; color: #25322e; font-size: 19px; letter-spacing: -.04em; }.member-search { margin-top: 18px; padding: 0 10px; min-height: 33px; }.member-group { margin-top: 24px; }.member-group-title { display: flex; align-items: center; gap: 8px; color: #85928e; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }.group-line { height: 1px; flex: 1; background: #e6edeb; }.member-list { display: flex; flex-direction: column; gap: 17px; margin-top: 17px; }.member-row { display: flex; align-items: center; gap: 8px; min-width: 0; }.member-avatar { position: relative; display: grid; place-items: center; width: 33px; height: 33px; flex: 0 0 auto; color: #fff; border-radius: 10px; font-size: 10px; font-weight: 700; }.member-avatar.speaking { box-shadow: 0 0 0 2px #90f691, 0 0 10px rgba(144,246,145,.35); }.member-presence { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border: 2px solid #fbfcfc; border-radius: 50%; background: #65d879; }.member-copy { min-width: 0; flex: 1; }.member-copy strong, .member-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.member-copy strong { color: #34423d; font-size: 10px; }.member-copy span { margin-top: 4px; color: #96a29e; font-size: 9px; }.member-volume { display: flex; align-items: center; gap: 5px; color: #a1afaa; width: 64px; }.member-volume input { width: 45px; height: 4px; appearance: none; border-radius: 99px; outline: none; cursor: pointer; }.member-volume input::-webkit-slider-thumb, .settings-range::-webkit-slider-thumb { width: 14px; height: 14px; appearance: none; border: 2px solid #81d8d0; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.12); cursor: pointer; }.member-volume input::-moz-range-thumb, .settings-range::-moz-range-thumb { width: 14px; height: 14px; border: 2px solid #81d8d0; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.12); cursor: pointer; }.member-empty { margin-top: 22px; color: #98a49f; font-size: 10px; text-align: center; }.member-panel-tip { display: flex; gap: 8px; margin-top: 36px; padding: 12px; color: #72827c; background: #eef5f2; border-radius: 9px; font-size: 9px; line-height: 1.5; }.member-panel-tip .ui-icon { color: #5e9e96; }
 
-.modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 28px; background: rgba(25, 33, 31, .42); backdrop-filter: blur(5px); }.settings-modal { display: flex; width: min(920px, 100%); max-height: min(760px, calc(100dvh - 56px)); overflow: hidden; border-radius: 16px; background: #fff; box-shadow: 0 20px 60px rgba(16,40,35,.2); }.settings-nav { display: flex; flex-direction: column; width: 215px; flex: 0 0 auto; padding: 28px 12px 20px; background: #f8faf9; border-right: 1px solid #e6ecea; }.settings-title { padding: 0 13px 20px; color: #25322e; font-size: 19px; font-weight: 700; }.settings-nav-item { display: flex; align-items: center; gap: 12px; padding: 11px 13px; color: #65736f; background: transparent; border-left: 3px solid transparent; border-radius: 8px; font-size: 11px; text-align: left; cursor: pointer; }.settings-nav-item.active { color: #006a64; background: #e2efec; border-left-color: #006a64; font-weight: 700; }.settings-version { margin-top: auto; padding: 20px 13px 0; color: #98a5a0; border-top: 1px solid #e4ebe8; font-size: 10px; line-height: 1.7; }.settings-version span { color: #b0bbb7; }.settings-main { display: flex; min-width: 0; flex: 1; flex-direction: column; }.settings-header { display: flex; align-items: center; justify-content: space-between; min-height: 75px; padding: 0 28px; border-bottom: 1px solid #edf1ef; }.settings-header h2 { margin: 0; color: #202c29; font-size: 22px; letter-spacing: -.045em; }.settings-content { flex: 1; overflow-y: auto; padding: 28px 40px; }.settings-section { max-width: 620px; margin: 0 auto; }.settings-section h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 21px; color: #293631; font-size: 16px; }.settings-section h3 .ui-icon { color: #006a64; }.settings-label { display: block; margin-bottom: 8px; color: #5e6d67; font-size: 10px; font-weight: 500; }.select-like { display: flex; align-items: center; justify-content: space-between; min-height: 39px; margin-bottom: 19px; padding: 0 13px; color: #394742; background: #f4f7f6; border-radius: 8px; font-size: 11px; }.select-like .ui-icon { color: #677671; }.settings-range-row { display: flex; align-items: center; justify-content: space-between; }.settings-range-row .settings-label { margin: 0; }.settings-range-row strong { color: #006a64; font-size: 10px; }.settings-range { width: 100%; height: 6px; margin: 11px 0 20px; appearance: none; border-radius: 999px; outline: none; cursor: pointer; }.settings-range::-webkit-slider-thumb { width: 19px; height: 19px; }.settings-range::-moz-range-thumb { width: 19px; height: 19px; }.mic-test { padding: 15px; border: 1px solid #e5ece9; border-radius: 11px; background: #fafcfb; }.mic-test-header { display: flex; align-items: center; justify-content: space-between; }.mic-test-header strong { color: #36453f; font-size: 11px; }.mic-test-header button { padding: 6px 9px; color: #006a64; background: #e0f1ee; border-radius: 5px; font-size: 10px; cursor: pointer; }.meter { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px; height: 39px; margin-top: 12px; padding: 0 4px 4px; border-bottom: 1px solid #dce6e2; }.meter i { width: 5px; min-height: 4px; border-radius: 3px 3px 0 0; background: #dfe6e3; }.meter i.active { background: #81ed8b; box-shadow: 0 0 7px rgba(129,237,139,.45); animation: meter 1s ease-in-out infinite alternate; }.meter-labels { display: flex; justify-content: space-between; margin-top: 6px; color: #9ba6a2; font-size: 8px; }.settings-separator { max-width: 620px; margin: 32px auto; border-top: 1px solid #edf1ef; }.mode-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px; color: #66817a; background: #eef7f4; border-radius: 8px; font-size: 10px; line-height: 1.5; }.mode-note .ui-icon { color: #4f9c91; }.settings-footer { display: flex; justify-content: flex-end; gap: 16px; min-height: 67px; padding: 15px 28px; border-top: 1px solid #edf1ef; }.text-button { padding: 0 6px; color: #63716c; background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; }.save-button { padding: 0 23px; }.qq-modal-card { position: relative; width: min(460px, 100%); max-height: min(90dvh, 720px); overflow-y: auto; padding: 30px; color: #263431; border: 1px solid #d9e7e3; border-radius: 20px; background: #fff; box-shadow: 0 20px 60px rgba(16,40,35,.22); text-align: center; }.qq-modal-heading { padding: 0 24px 18px; }.qq-modal-heading h2 { margin: 8px 0 0; color: #1d2d29; font-size: 25px; letter-spacing: -.04em; }.qq-modal-close { position: absolute; top: 13px; right: 13px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #6d7d78; background: #f1f6f4; border: 1px solid #e1ebe8; border-radius: 50%; cursor: pointer; }.qq-modal-close:hover { color: #006a64; background: #e2f2ef; border-color: #c8e6e1; }.qq-qr-image { display: block; width: min(100%, 360px); max-height: min(55vh, 520px); margin: 0 auto; object-fit: contain; border-radius: 12px; }.qq-direct-join { margin: 18px 0 9px; color: #667773; font-size: 13px; }.qq-join-link { display: block; padding: 11px 14px; color: #006a64; background: #edf8f5; border: 1px solid #cfe9e4; border-radius: 10px; font-size: 12px; font-weight: 700; line-height: 1.45; text-decoration: none; overflow-wrap: anywhere; }.qq-join-link:hover { color: #fff; background: #006a64; border-color: #006a64; }.toast { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 8px; padding: 11px 15px; color: #fff; background: #263e39; border-radius: 9px; box-shadow: 0 10px 24px rgba(16,48,42,.2); font-size: 11px; animation: toast-in .25s ease-out; }
+.modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 28px; background: rgba(25, 33, 31, .42); backdrop-filter: blur(5px); }.settings-modal { display: flex; width: min(920px, 100%); max-height: min(760px, calc(100dvh - 56px)); overflow: hidden; border-radius: 16px; background: #fff; box-shadow: 0 20px 60px rgba(16,40,35,.2); }.settings-nav { display: flex; flex-direction: column; width: 215px; flex: 0 0 auto; padding: 28px 12px 20px; background: #f8faf9; border-right: 1px solid #e6ecea; }.settings-title { padding: 0 13px 20px; color: #25322e; font-size: 19px; font-weight: 700; }.settings-nav-item { display: flex; align-items: center; gap: 12px; padding: 11px 13px; color: #65736f; background: transparent; border-left: 3px solid transparent; border-radius: 8px; font-size: 11px; text-align: left; cursor: pointer; }.settings-nav-item.active { color: #006a64; background: #e2efec; border-left-color: #006a64; font-weight: 700; }.settings-version { margin-top: auto; padding: 20px 13px 0; color: #98a5a0; border-top: 1px solid #e4ebe8; font-size: 10px; line-height: 1.7; }.settings-version span { color: #b0bbb7; }.settings-main { display: flex; min-width: 0; flex: 1; flex-direction: column; }.settings-header { display: flex; align-items: center; justify-content: space-between; min-height: 75px; padding: 0 28px; border-bottom: 1px solid #edf1ef; }.settings-header h2 { margin: 0; color: #202c29; font-size: 22px; letter-spacing: -.045em; }.settings-content { flex: 1; overflow-y: auto; padding: 28px 40px; }.settings-section { max-width: 620px; margin: 0 auto; }.settings-section h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 21px; color: #293631; font-size: 16px; }.settings-section h3 .ui-icon { color: #006a64; }.settings-label { display: block; margin-bottom: 8px; color: #5e6d67; font-size: 10px; font-weight: 500; }.select-like { display: flex; align-items: center; justify-content: space-between; min-height: 39px; margin-bottom: 19px; padding: 0 13px; color: #394742; background: #f4f7f6; border-radius: 8px; font-size: 11px; }.select-like .ui-icon { color: #677671; }.settings-range-row { display: flex; align-items: center; justify-content: space-between; }.settings-range-row .settings-label { margin: 0; }.settings-range-row strong { color: #006a64; font-size: 10px; }.settings-range { width: 100%; height: 6px; margin: 11px 0 20px; appearance: none; border-radius: 999px; outline: none; cursor: pointer; }.settings-range::-webkit-slider-thumb { width: 19px; height: 19px; }.settings-range::-moz-range-thumb { width: 19px; height: 19px; }.mic-test { padding: 15px; border: 1px solid #e5ece9; border-radius: 11px; background: #fafcfb; }.mic-test-header { display: flex; align-items: center; justify-content: space-between; }.mic-test-header strong { color: #36453f; font-size: 11px; }.mic-test-header button { padding: 6px 9px; color: #006a64; background: #e0f1ee; border-radius: 5px; font-size: 10px; cursor: pointer; }.meter { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px; height: 39px; margin-top: 12px; padding: 0 4px 4px; border-bottom: 1px solid #dce6e2; }.meter i { width: 5px; min-height: 4px; border-radius: 3px 3px 0 0; background: #dfe6e3; }.meter i.active { background: #81ed8b; box-shadow: 0 0 7px rgba(129,237,139,.45); animation: meter 1s ease-in-out infinite alternate; }.meter-labels { display: flex; justify-content: space-between; margin-top: 6px; color: #9ba6a2; font-size: 8px; }.settings-separator { max-width: 620px; margin: 32px auto; border-top: 1px solid #edf1ef; }.mode-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px; color: #66817a; background: #eef7f4; border-radius: 8px; font-size: 10px; line-height: 1.5; }.mode-note .ui-icon { color: #4f9c91; }.settings-footer { display: flex; justify-content: flex-end; gap: 16px; min-height: 67px; padding: 15px 28px; border-top: 1px solid #edf1ef; }.text-button { padding: 0 6px; color: #63716c; background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; }.save-button { padding: 0 23px; }.modal-close-button { position: absolute; top: 13px; right: 13px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #6d7d78; background: #f1f6f4; border: 1px solid #e1ebe8; border-radius: 50%; cursor: pointer; }.modal-close-button:hover { color: #006a64; background: #e2f2ef; border-color: #c8e6e1; }.toast { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 8px; padding: 11px 15px; color: #fff; background: #263e39; border-radius: 9px; box-shadow: 0 10px 24px rgba(16,48,42,.2); font-size: 11px; animation: toast-in .25s ease-out; }
 
 .channel-password-modal { position: relative; width: min(420px, 100%); padding: 31px 32px 28px; color: #263431; border: 1px solid #d9e7e3; border-radius: 18px; background: #fff; box-shadow: 0 20px 60px rgba(16,40,35,.22); }
 .channel-password-icon { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 17px; color: #006a64; background: #e4f4f0; border-radius: 14px; }
@@ -1510,10 +1494,7 @@ function stopWhisperTalk(): void {
 
 @media (max-width: 740px) {
   .header-tools { gap: 7px; }
-  .header-note, .github-button span, .qq-button .qq-label, .changelog-button span, .guide-button span { display: none; }
-  .github-button { width: 34px; justify-content: center; padding: 0; }
-  .qq-button { width: 32px; min-width: 32px; min-height: 32px; justify-content: center; padding: 0; }
-  .changelog-button { width: 32px; min-width: 32px; min-height: 32px; padding: 0; }
+  .header-note, .guide-button span { display: none; }
   .guide-button { width: 32px; justify-content: center; padding: 0; }
 }
 .chat-tabs { display: flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 18px; overflow-x: auto; padding-bottom: 3px; }
@@ -1605,13 +1586,7 @@ function stopWhisperTalk(): void {
 :global(html[data-theme="dark"] .join-page .join-footer a) { color: var(--accent); }
 :global(html[data-theme="dark"] .join-page .join-card) { background: color-mix(in srgb, var(--surface-1) 94%, transparent); border-color: var(--border); box-shadow: 0 20px 52px color-mix(in srgb, var(--text-primary) 14%, transparent); }
 :global(html[data-theme="dark"] .join-page .field-wrap) { color: var(--text-muted); background: var(--surface-2); }
-:global(html[data-theme="dark"] .join-page .field-wrap input) { color: var(--text-primary); }
-:global(html[data-theme="dark"] .join-page .qq-modal-card) { color: var(--text-primary); border-color: var(--border); background: var(--surface-1); box-shadow: 0 20px 60px color-mix(in srgb, var(--text-primary) 18%, transparent); }
-:global(html[data-theme="dark"] .join-page .qq-modal-heading h2) { color: var(--text-primary); }
-:global(html[data-theme="dark"] .join-page .qq-direct-join) { color: var(--text-muted); }
-:global(html[data-theme="dark"] .join-page .qq-modal-close) { color: var(--text-muted); background: var(--surface-2); border-color: var(--border); }
-:global(html[data-theme="dark"] .join-page .qq-join-link) { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
-:global(html[data-theme="dark"] .join-page .qq-join-link:hover) { color: var(--surface-1); background: var(--accent); border-color: var(--accent); }
+:global(html[data-theme="dark"] .modal-close-button) { color: var(--text-muted); background: var(--surface-2); border-color: var(--border); }
 :global(html[data-theme="dark"] .join-page .field-wrap input::placeholder) { color: var(--text-muted); }
 :global(html[data-theme="dark"] .join-page .join-footer) { border-top-color: var(--border); }
 
@@ -1849,8 +1824,7 @@ function stopWhisperTalk(): void {
 
 @media (max-width: 390px) {
   .join-page .header-tools { gap: 4px; }
-  .join-page .github-button, .join-page .changelog-button, .join-page .guide-button { width: 32px; min-width: 32px; min-height: 32px; height: 32px; }
-  .join-page .version-badge { min-height: 32px; padding-inline: 6px; font-size: 10px; }
+  .join-page .guide-button { width: 32px; min-width: 32px; min-height: 32px; height: 32px; }
   .join-page .language-switcher { min-width: 62px; }
   .workspace-header { padding-inline: 10px; }
   .workspace-actions .header-action { width: 32px; height: 32px; flex-basis: 32px; }
@@ -1873,44 +1847,13 @@ function stopWhisperTalk(): void {
   .join-page .brand-lockup small { display: none; }
   .join-page .header-tools { min-width: 0; flex: 0 0 auto; gap: 2px; }
   .join-page .header-tools .theme-toggle { display: none; }
-  .join-page .github-button, .join-page .bilibili-button, .join-page .changelog-button, .join-page .guide-button { width: 28px; min-width: 28px; min-height: 28px; height: 28px; padding: 0; }
-  .join-page .github-button, .join-page .bilibili-button, .join-page .changelog-button, .join-page .guide-button { justify-content: center; }
-  .join-page .github-button .ui-icon { width: 16px; height: 16px; }
-  .join-page .bilibili-glyph { width: 18px; height: 18px; }
-  .join-page .version-badge { min-width: 28px; min-height: 28px; padding-inline: 4px; font-size: 9px; }
+  .join-page .guide-button { width: 28px; min-width: 28px; min-height: 28px; height: 28px; padding: 0; justify-content: center; }
   .join-page .language-switcher { min-width: 58px; }
 }
 
 @media (max-width: 360px) {
   .join-page .brand-lockup > div { display: none; }
   .join-page .brand-lockup { flex: 0 0 32px; }
-}
-
-.bilibili-button { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 10px; color: #e56b91; background: #fff0f5; border: 1px solid #f6d2df; border-radius: 8px; font-size: 11px; font-weight: 800; text-decoration: none; transition: .18s; }
-.bilibili-button:hover { color: #fff; background: #e56b91; border-color: #e56b91; box-shadow: 0 7px 16px rgba(229,107,145,.2); transform: translateY(-1px); }
-.bilibili-glyph { display: grid; place-items: center; width: 18px; height: 18px; color: #fff; background: #e56b91; border-radius: 5px; font-size: 11px; line-height: 1; }
-.bilibili-button:hover .bilibili-glyph { color: #e56b91; background: #fff; }
-
-.qq-button { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 10px; color: #1684b8; background: #eef9ff; border: 1px solid #cdeafa; border-radius: 8px; font-size: 11px; font-weight: 800; cursor: pointer; transition: .18s; }
-.qq-button:hover { color: #fff; background: #168fca; border-color: #168fca; box-shadow: 0 7px 16px rgba(22,143,202,.2); transform: translateY(-1px); }
-.qq-button .ui-icon { color: #168fca; }
-.qq-button:hover .ui-icon { color: #fff; }
-
-@media (max-width: 740px) {
-  .bilibili-button { width: 32px; min-width: 32px; min-height: 32px; justify-content: center; padding: 0; }
-  .bilibili-button .bilibili-label { display: none; }
-  .qq-button { width: 32px; min-width: 32px; min-height: 32px; justify-content: center; padding: 0; }
-  .qq-button .qq-label { display: none; }
-}
-
-@media (max-width: 390px) {
-  .join-page .bilibili-button { width: 32px; min-width: 32px; min-height: 32px; height: 32px; }
-}
-
-/* Override the shared Bilibili sizing above for the tighter welcome header. */
-@media (max-width: 420px) {
-  .join-page .bilibili-button { width: 28px; min-width: 28px; min-height: 28px; height: 28px; padding: 0; }
-  .join-page .qq-button { width: 28px; min-width: 28px; min-height: 28px; height: 28px; padding: 0; }
 }
 
 .network-performance { position: relative; z-index: 8; }
@@ -1944,15 +1887,7 @@ function stopWhisperTalk(): void {
 .web-client.language-en .join-page .header-note,
 .web-client.language-de .join-page .brand-lockup small,
 .web-client.language-de .join-page .header-note { font-size: 11px; }
-.web-client.language-en .join-page .github-button,
-.web-client.language-en .join-page .qq-button,
-.web-client.language-en .join-page .bilibili-button,
-.web-client.language-en .join-page .changelog-button,
 .web-client.language-en .join-page .guide-button,
-.web-client.language-de .join-page .github-button,
-.web-client.language-de .join-page .qq-button,
-.web-client.language-de .join-page .bilibili-button,
-.web-client.language-de .join-page .changelog-button,
 .web-client.language-de .join-page .guide-button { font-size: 9.7px; }
 .web-client.language-en .join-page .eyebrow,
 .web-client.language-de .join-page .eyebrow { font-size: 12px; }
