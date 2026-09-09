@@ -120,8 +120,11 @@ install_docker() {
 
     configure_firewall "$PORT"
 
-    info "正在拉取依赖并构建 WebSpeak Docker 镜像..."
-    docker compose build
+    info "正在启动 WebSpeak Docker 服务（优先拉取 GitHub 预构建镜像，若受限则在本地构建）..."
+    if ! docker compose pull; then
+        warn "预构建镜像拉取失败（可能因网络受限），转为在本地构建镜像..."
+        docker compose build
+    fi
 
     info "正在启动 WebSpeak 服务..."
     docker compose up -d
@@ -175,8 +178,11 @@ update_app() {
     fi
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
-        info "检测到 Docker 部署环境，正在重新构建并重启容器..."
-        docker compose build
+        info "检测到 Docker 部署环境，正在更新并重启容器..."
+        if ! docker compose pull; then
+            warn "预构建镜像拉取失败，转为在本地重新构建..."
+            docker compose build
+        fi
         docker compose up -d
         success "Docker 容器已平滑更新并重启！"
     elif systemctl is-active --quiet webspeak; then

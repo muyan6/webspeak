@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${WEBSPEAK_IMAGE:-webspeak:latest}
+    image: ${WEBSPEAK_IMAGE:-ghcr.io/muyan6/webspeak:latest}
     restart: unless-stopped
     # WebSpeak needs to reach a TeamSpeak server running on the same host.
     # Host networking also exposes the configured WebRTC UDP range directly.
