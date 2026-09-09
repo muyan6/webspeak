@@ -56,7 +56,7 @@ test("SQLite persistence initializes schema and stores the single admin/settings
   reopened.close();
 });
 
-test("SQLite schema v1 upgrades to v4 with a migration copy", () => {
+test("SQLite schema v1 upgrades to latest schema (v5) with a migration copy", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "webspeak-db-migration-"));
   const dbPath = path.join(directory, "webspeak.db");
   const legacy = new DatabaseSync(dbPath);
@@ -76,12 +76,13 @@ test("SQLite schema v1 upgrades to v4 with a migration copy", () => {
   legacy.close();
 
   const upgraded = new WebSpeakDatabase(dbPath);
-  assert.equal(upgraded.schemaVersion, 4);
+  assert.equal(upgraded.schemaVersion, DATABASE_SCHEMA_VERSION);
   assert.equal(upgraded.getSettings().webRtcEnabled, false);
   assert.equal(upgraded.getSettings().webRtcUdpStart, 40000);
   assert.equal(upgraded.getSettings().webRtcUdpEnd, 40099);
   assert.equal(upgraded.getSettings().welcomeTextEn, "");
   assert.equal(upgraded.listManagedInvites().length, 0);
+  assert.equal(upgraded.getSessionHistory().length, 0);
   assert.equal(existsSync(`${dbPath}.schema-1.bak`), true);
   upgraded.close();
 });

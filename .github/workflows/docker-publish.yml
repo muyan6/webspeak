@@ -2,7 +2,7 @@ name: Publish Docker image
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/echosixhiya/webspeak
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   publish:
