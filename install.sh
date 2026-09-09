@@ -202,12 +202,8 @@ update_app() {
     fi
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
-        info "检测到 Docker 部署环境，正在更新并重启容器..."
-        if ! pull_docker_image; then
-            info "正在本地重新构建 WebSpeak Docker 镜像..."
-            docker compose build
-        fi
-        docker compose up -d
+        info "检测到 Docker 部署环境，正在基于最新拉取的代码重新构建并重启容器..."
+        docker compose up -d --build
         success "Docker 容器已平滑更新并重启！"
     elif systemctl is-active --quiet webspeak; then
         info "检测到 Systemd 服务环境，正在重新编译并重启服务..."
