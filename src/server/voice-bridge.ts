@@ -274,6 +274,7 @@ export class VoiceBridge {
         entry!.channelTree = mapChannelTree(normalizedSnapshot);
         entry!.members.clear();
         for (const client of normalizedSnapshot.clients) {
+          if (isHiddenOrQueryClient(client)) continue;
           entry!.members.set(client.id, {
             id: client.id,
             nickname: client.nickname,
@@ -439,6 +440,7 @@ export class VoiceBridge {
       });
 
       tsClient.on("clientEnter", (info) => {
+        if (isHiddenOrQueryClient(info)) return;
         const candidateSelfId = tsClient.getClientId();
         if (candidateSelfId > 0 && info.id === candidateSelfId) {
           selfId = candidateSelfId;
@@ -455,6 +457,11 @@ export class VoiceBridge {
       });
 
       tsClient.on("clientLeave", (info) => {
+        if (isHiddenOrQueryClient(info)) {
+          directory.applyClientLeave(info.id);
+          refreshDirectory();
+          return;
+        }
         const wasKnown = entry!.members.has(info.id);
         const leavingMember = entry!.members.get(info.id);
         entry!.webrtc?.setMemberVolume(info.id, 1);
@@ -468,6 +475,7 @@ export class VoiceBridge {
       });
 
       tsClient.on("clientMoved", (info) => {
+        if (isHiddenOrQueryClient(info)) return;
         if (info.targetChannelID === undefined || info.targetChannelID === 0n) return;
         const movedMember = entry!.members.get(info.id);
         if (info.id === selfId) selfChannelId = info.targetChannelID;
@@ -1072,6 +1080,13 @@ function snapshotAudioStats(entry: WebClientEntry): AudioFlowStats {
   return stats;
 }
 
+function isHiddenOrQueryClient(client: { type?: number; nickname?: string } | undefined): boolean {
+  if (!client) return false;
+  if (client.type === 1) return true;
+  const name = (client.nickname || "").trim().toLowerCase();
+  return name === "serveradmin" || name.startsWith("serveradmin ") || name.startsWith("serveradmin from");
+}
+
 function mapChannelTree(snapshot: TSDirectorySnapshot): unknown[] {
   return snapshot.channels.map((channel) => ({
     id: String(channel.id),
@@ -1079,7 +1094,7 @@ function mapChannelTree(snapshot: TSDirectorySnapshot): unknown[] {
     name: channel.name || "未命名频道",
     description: channel.description || "",
     members: snapshot.clients
-      .filter((client) => client.channelID === channel.id)
+      .filter((client) => client.channelID === channel.id && !isHiddenOrQueryClient(client))
       .map((client) => ({
         id: client.id,
         nickname: client.nickname || "未知用户",

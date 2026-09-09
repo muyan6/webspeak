@@ -57,6 +57,13 @@ export interface ChannelInfo {
   members?: { id: number; nickname: string; uid?: string; away?: boolean; awayMessage?: string; inputMuted?: boolean; outputMuted?: boolean; channelCommander?: boolean }[];
 }
 
+export function isHiddenOrQueryClient(client: { nickname?: string; type?: number } | undefined): boolean {
+  if (!client) return false;
+  if (client.type === 1) return true;
+  const name = (client.nickname || "").trim().toLowerCase();
+  return name === "serveradmin" || name.startsWith("serveradmin ") || name.startsWith("serveradmin from");
+}
+
 export interface ChatMessage {
   id: string;
   scope: "channel" | "server" | "private" | "system";
@@ -1308,6 +1315,7 @@ export function useVoiceWebSocket() {
         if (Array.isArray(msg.members)) {
           members.length = 0;
           for (const member of msg.members) {
+            if (isHiddenOrQueryClient(member)) continue;
             members.push({ ...member, isSelf: Number(member.id) === state.tsClientId });
           }
           syncKnownMemberVolumes();
@@ -1336,7 +1344,7 @@ export function useVoiceWebSocket() {
         }
         break;
       case "memberEnter":
-        if (!members.some((member) => member.id === msg.id)) {
+        if (!isHiddenOrQueryClient(msg) && !members.some((member) => member.id === msg.id)) {
           members.push({ id: msg.id, nickname: msg.nickname, uid: typeof msg.uid === "string" ? msg.uid : undefined, isSelf: Boolean(msg.isSelf) });
           syncKnownMemberVolumes();
         }
@@ -1352,7 +1360,12 @@ export function useVoiceWebSocket() {
       case "channelList":
         channels.length = 0;
         if (Array.isArray(msg.channels)) {
-          for (const channel of msg.channels) channels.push(channel);
+          for (const channel of msg.channels) {
+            if (Array.isArray(channel.members)) {
+              channel.members = channel.members.filter((m: any) => !isHiddenOrQueryClient(m));
+            }
+            channels.push(channel);
+          }
         }
         syncKnownMemberVolumes();
         break;

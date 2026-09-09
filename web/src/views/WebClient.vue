@@ -319,7 +319,7 @@ import Icon from "../components/Icon.vue";
 import LanguageSwitcher from "../components/LanguageSwitcher.vue";
 import AudioSettingsModal from "../components/client/AudioSettingsModal.vue";
 import DesktopAudioDock from "../components/client/DesktopAudioDock.vue";
-import { useVoiceWebSocket, type ChannelInfo, type ChannelMember, type LatencyProbeResult } from "../composables/useVoiceWebSocket.js";
+import { useVoiceWebSocket, isHiddenOrQueryClient, type ChannelInfo, type ChannelMember, type LatencyProbeResult } from "../composables/useVoiceWebSocket.js";
 import { clearLocalData as clearStoredLocalData, isLocalPersistenceAvailable, listFavorites, listRecentServers, loadLocalPreferences, loadStoredIdentity, recordRecentServer, removeFavorite, removeStoredIdentity, saveFavorite, saveLocalPreferences, saveStoredIdentity, type FavoriteServer, type RecentServer } from "../services/local-persistence.js";
 import { applyTheme, getStoredTheme, isDarkTheme, nextTheme, saveTheme, type ThemeMode } from "../services/theme.js";
 import { combineTeamSpeakTarget, DEFAULT_TEAM_SPEAK_PORT, isValidTeamSpeakPort, splitTeamSpeakTarget } from "../services/teamspeak-target.js";
@@ -545,7 +545,9 @@ const channelTree = computed<TreeChannel[]>(() => {
     .map((item) => ({
       ...item,
       depth: depthOf(item),
-      members: (item.members ?? []).map((member) => ({ ...member, isSelf: member.id === voiceState.tsClientId })),
+      members: (item.members ?? [])
+        .filter((member) => !isHiddenOrQueryClient(member))
+        .map((member) => ({ ...member, isSelf: member.id === voiceState.tsClientId })),
     }))
     .sort((a, b) => `${a.parentID}/${a.id}`.localeCompare(`${b.parentID}/${b.id}`));
 });
@@ -561,7 +563,9 @@ const currentChannelName = computed(() => (currentChannel.value?.name ?? channel
 const currentChannelDescription = computed(() => currentChannel.value?.description ?? "");
 const currentMembers = computed<ChannelMember[]>(() => {
   const source = currentChannel.value ? currentChannel.value.members : members;
-  return source.map((member) => ({ ...member, isSelf: member.isSelf || member.id === voiceState.tsClientId }));
+  return source
+    .filter((member) => !isHiddenOrQueryClient(member))
+    .map((member) => ({ ...member, isSelf: member.isSelf || member.id === voiceState.tsClientId }));
 });
 const roomMembers = computed(() => currentMembers.value.slice(0, 4));
 const memberChannels = computed<TreeChannel[]>(() => {
@@ -573,7 +577,7 @@ const filteredMemberChannels = computed(() => {
   if (!search) return memberChannels.value;
   return memberChannels.value.filter((item) => item.name.toLowerCase().includes(search) || item.members.some((member) => member.nickname.toLowerCase().includes(search)));
 });
-const whisperTargets = computed(() => [...whisperTargetIds].map((id) => members.find((member) => member.id === id)).filter((member): member is ChannelMember => Boolean(member)));
+const whisperTargets = computed(() => [...whisperTargetIds].map((id) => members.find((member) => member.id === id)).filter((member): member is ChannelMember => Boolean(member) && !isHiddenOrQueryClient(member)));
 
 const privateConversations = computed(() => {
   const conversations = new Map<string, { id: number; name: string; lastMessage: number }>();
@@ -582,6 +586,7 @@ const privateConversations = computed(() => {
     const id = Number(message.conversationId);
     if (!id) continue;
     const member = members.find((candidate) => candidate.id === id);
+    if (member && isHiddenOrQueryClient(member)) continue;
     const existing = conversations.get(message.conversationId);
     conversations.set(message.conversationId, { id, name: member?.nickname ?? existing?.name ?? message.invokerName, lastMessage: Math.max(existing?.lastMessage ?? 0, message.timestamp) });
   }
