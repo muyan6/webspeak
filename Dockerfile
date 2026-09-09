@@ -7,7 +7,9 @@ RUN apt-get update \
 
 COPY package.json package-lock.json ./
 COPY web/package.json web/package-lock.json ./web/
-RUN npm ci --ignore-scripts --no-audit --no-fund
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry ${NPM_REGISTRY} \
+  && npm ci --ignore-scripts --no-audit --no-fund
 COPY scripts/prepare-sdk.mjs ./scripts/prepare-sdk.mjs
 RUN npm run prepare:sdk
 RUN npm rebuild @discordjs/opus --foreground-scripts --no-audit --no-fund

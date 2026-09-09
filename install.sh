@@ -90,6 +90,31 @@ configure_firewall() {
     fi
 }
 
+pull_docker_image() {
+    info "正在拉取 WebSpeak Docker 镜像（支持国内镜像加速）..."
+    local candidate_images=(
+        "ghcr.m.daocloud.io/muyan6/webspeak:latest"
+        "ghcr.nju.edu.cn/muyan6/webspeak:latest"
+        "ghcr.io/muyan6/webspeak:latest"
+    )
+
+    for img in "${candidate_images[@]}"; do
+        info "尝试拉取镜像源: ${img} ..."
+        if docker pull "${img}"; then
+            success "镜像拉取成功: ${img}"
+            docker tag "${img}" "ghcr.m.daocloud.io/muyan6/webspeak:latest" > /dev/null 2>&1 || true
+            docker tag "${img}" "ghcr.io/muyan6/webspeak:latest" > /dev/null 2>&1 || true
+            docker tag "${img}" "webspeak:latest" > /dev/null 2>&1 || true
+            return 0
+        else
+            warn "从 ${img} 拉取失败或超时，尝试下一个备用源..."
+        fi
+    done
+
+    warn "所有预构建镜像源拉取失败，将自动转为本地构建..."
+    return 1
+}
+
 install_docker() {
     check_root
     install_docker_if_needed
@@ -120,9 +145,8 @@ install_docker() {
 
     configure_firewall "$PORT"
 
-    info "正在启动 WebSpeak Docker 服务（优先拉取 GitHub 预构建镜像，若受限则在本地构建）..."
-    if ! docker compose pull; then
-        warn "预构建镜像拉取失败（可能因网络受限），转为在本地构建镜像..."
+    if ! pull_docker_image; then
+        info "正在本地构建 WebSpeak Docker 镜像..."
         docker compose build
     fi
 
@@ -179,8 +203,8 @@ update_app() {
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
         info "检测到 Docker 部署环境，正在更新并重启容器..."
-        if ! docker compose pull; then
-            warn "预构建镜像拉取失败，转为在本地重新构建..."
+        if ! pull_docker_image; then
+            info "正在本地重新构建 WebSpeak Docker 镜像..."
             docker compose build
         fi
         docker compose up -d
