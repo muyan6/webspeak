@@ -286,14 +286,15 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import Icon from "../Icon.vue";
 import { t as translate, localizedMessage as formatLocalized, type Language } from "../../locales/translations.js";
+import type { AudioInputDevice, AudioOutputDevice } from "../../composables/useVoiceWebSocket.js";
 
 const props = withDefaults(defineProps<{
   open: boolean;
   language: Language;
   selectedInputDeviceId: string;
   selectedOutputDeviceId: string;
-  inputDevices: MediaDeviceInfo[];
-  outputDevices: MediaDeviceInfo[];
+  inputDevices: AudioInputDevice[];
+  outputDevices: AudioOutputDevice[];
   outputDeviceSupported: boolean;
   audioPermission: string;
   audioContextState: string;

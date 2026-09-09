@@ -1654,6 +1654,10 @@ export function useVoiceWebSocket() {
     applyOutputVolume();
   }
 
+  function toggleMicrophone(): void {
+    setMicrophoneMuted(!microphoneMuted.value);
+  }
+
   function setVoxThreshold(threshold: number): void {
     voxThreshold.value = clamp(threshold, 0.001, 0.08);
     void saveAudioPreferences();

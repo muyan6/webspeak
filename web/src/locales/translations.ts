@@ -276,7 +276,6 @@ export const translations: Record<Language, Record<string, string>> = {
     pressAnyKey: "请按下任意按键…",
     clickToRebind: "点击重新绑定按键",
     pttHoldToTalkPrompt: "按住热键说话",
-    speaking: "正在说话…",
   },
   en: {
     themeSystem: "System theme",
@@ -553,7 +552,6 @@ export const translations: Record<Language, Record<string, string>> = {
     pressAnyKey: "Press any key…",
     clickToRebind: "Click to rebind hotkey",
     pttHoldToTalkPrompt: "Hold hotkey to talk",
-    speaking: "Speaking…",
   },
   de: {
     themeSystem: "Systemdesign",
@@ -830,7 +828,6 @@ export const translations: Record<Language, Record<string, string>> = {
     pressAnyKey: "Taste drücken…",
     clickToRebind: "Klicken zum Neubelegen",
     pttHoldToTalkPrompt: "Hotkey zum Sprechen gedrückt halten",
-    speaking: "Spricht…",
   },
 };
 
