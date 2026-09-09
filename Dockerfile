@@ -1,7 +1,8 @@
 FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
-RUN apt-get update \
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true \
+  && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
@@ -24,7 +25,8 @@ RUN npm --prefix web run build \
 FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
-RUN apt-get update \
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true \
+  && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libstdc++6 iputils-ping \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /data \

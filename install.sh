@@ -91,18 +91,16 @@ configure_firewall() {
 }
 
 pull_docker_image() {
-    info "正在拉取 WebSpeak Docker 镜像（支持国内镜像加速）..."
+    info "正在拉取 WebSpeak Docker 预构建镜像..."
     local candidate_images=(
-        "ghcr.m.daocloud.io/muyan6/webspeak:latest"
-        "ghcr.nju.edu.cn/muyan6/webspeak:latest"
         "ghcr.io/muyan6/webspeak:latest"
+        "ghcr.nju.edu.cn/muyan6/webspeak:latest"
     )
 
     for img in "${candidate_images[@]}"; do
         info "尝试拉取镜像源: ${img} ..."
         if docker pull "${img}"; then
             success "镜像拉取成功: ${img}"
-            docker tag "${img}" "ghcr.m.daocloud.io/muyan6/webspeak:latest" > /dev/null 2>&1 || true
             docker tag "${img}" "ghcr.io/muyan6/webspeak:latest" > /dev/null 2>&1 || true
             docker tag "${img}" "webspeak:latest" > /dev/null 2>&1 || true
             return 0
@@ -111,7 +109,7 @@ pull_docker_image() {
         fi
     done
 
-    warn "所有预构建镜像源拉取失败，将自动转为本地构建..."
+    warn "所有预构建镜像源拉取失败，将自动转为本地快速构建..."
     return 1
 }
 
@@ -202,8 +200,14 @@ update_app() {
     fi
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
-        info "检测到 Docker 部署环境，正在基于最新拉取的代码重新构建并重启容器..."
-        docker compose up -d --build
+        info "检测到 Docker 部署环境，正在更新服务..."
+        if pull_docker_image; then
+            info "已拉取最新预构建镜像，正在重启容器..."
+            docker compose up -d --force-recreate
+        else
+            info "预构建镜像拉取失败或未就绪，正在使用本地最新代码快速构建容器..."
+            docker compose up -d --build
+        fi
         success "Docker 容器已平滑更新并重启！"
     elif systemctl is-active --quiet webspeak; then
         info "检测到 Systemd 服务环境，正在重新编译并重启服务..."
