@@ -1,0 +1,40 @@
+{
+  "name": "webspeak-webclient",
+  "version": "0.1.8",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "Server-side browser gateway for TeamSpeak — deploy on your server, users join from any browser",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "tsx --test \"test/**/*.test.ts\"",
+    "start": "node dist/index.js",
+    "web:dev": "cd web && npx vite --host",
+    "web:build": "cd web && npx vite build",
+    "prepare:sdk": "node scripts/prepare-sdk.mjs"
+  },
+  "dependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "@echosixhiya/teamspeak-client": "git+https://github.com/EchoSixHIYA/teamspeak-js.git#8d91c30",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "werift": "0.24.4",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  },
+  "overrides": {
+    "body-parser": "^2.3.0",
+    "esbuild": "^0.28.2",
+    "tar": "^7.5.22"
+  }
+}
