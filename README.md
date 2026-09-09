@@ -181,11 +181,34 @@ WebSpeak 面向希望通过网页提供 TeamSpeak 语音服务的个人、社区
 
 | 方案 | 适用场景 | 运行环境 |
 | --- | --- | --- |
-| **Docker Compose（推荐）** | 服务器长期运行、便于升级和持久化 | Docker Engine + Docker Compose |
+| **一键脚本（极简推荐）** | Linux / Windows 服务器或个人电脑一键部署与升级 | Linux (Docker/Systemd) 或 Windows |
+| **Docker Compose** | 服务器长期运行、便于升级和持久化 | Docker Engine + Docker Compose |
 | **发布包** | 不希望安装 Node.js 或构建依赖 | Windows x64 或 Linux x64 |
 | **源码运行** | 开发、调试或二次开发 | Node.js 22.5+、Git 与本地编译工具 |
 
-#### Docker Compose（推荐）
+#### ⚡ 一键安装与管理脚本（极简推荐）
+
+##### Linux 服务器（Ubuntu / Debian / CentOS / Rocky 等）：
+在终端中执行以下命令（支持一键安装 Docker、配置防火墙、编译启动、查看状态及后续升级）：
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/muyan6/webspeak/main/install.sh)
+```
+或下载代码后运行交互管理面板：
+```bash
+git clone https://github.com/muyan6/webspeak.git && cd webspeak && bash install.sh
+```
+
+##### Linux 一键更新：
+```bash
+bash update.sh
+```
+
+##### Windows 用户：
+直接双击运行项目根目录下的 **`install.bat`**（一键启动）或 **`update.bat`**（一键更新）。
+
+---
+
+#### Docker Compose
 
 ```bash
 git clone --depth 1 https://github.com/EchoSixHIYA/WebSpeak-client-for-TeamSpeak.git

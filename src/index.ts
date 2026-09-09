@@ -36,12 +36,15 @@ async function main() {
   removeObsoleteBootstrapFile();
   const joinTickets = new JoinTicketStore();
 
-  logger.info({ dataDir: DATA_DIR }, "Starting WebSpeak server");
+  const configuredPort = Number(process.env.PORT || process.env.APP_PORT || APP_PORT);
+  const serverPort = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535 ? configuredPort : APP_PORT;
+
+  logger.info({ port: serverPort, dataDir: DATA_DIR }, "Starting WebSpeak server");
 
   const hasCert = existsSync(path.join(CERT_DIR, "cert.pem"));
 
   const webServer = createWebServer({
-    port: APP_PORT,
+    port: serverPort,
     version: APP_VERSION,
     logFile: path.join(LOG_DIR, "webspeak.log"),
     staticDir: STATIC_DIR,
