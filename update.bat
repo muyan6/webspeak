@@ -4,7 +4,8 @@ title WebSpeak 一键更新 (Windows)
 
 echo ================================================================
 echo           WebSpeak 一键更新程序
-echo           仓库: https://github.com/muyan6/webspeak
+echo           Gitee:  https://gitee.com/muyan6/webspeak
+echo           GitHub: https://github.com/muyan6/webspeak
 echo ================================================================
 echo.
 
@@ -15,7 +16,10 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [1/3] 正在拉取远程仓库最新更新...
+echo [1/3] 正在拉取 Gitee / GitHub 最新更新...
+git remote set-url origin https://gitee.com/muyan6/webspeak.git >nul 2>nul
+git remote set-url --add --push origin https://gitee.com/muyan6/webspeak.git >nul 2>nul
+git remote set-url --add --push origin https://github.com/muyan6/webspeak.git >nul 2>nul
 git pull origin main
 
 echo [2/3] 正在检查运行环境...

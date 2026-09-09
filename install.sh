@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebSpeak 一键安装与管理脚本
-# GitHub: https://github.com/muyan6/webspeak
+# Gitee: https://gitee.com/muyan6/webspeak
 # ==============================================================================
 
 set -e
@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-REPO_URL="https://github.com/muyan6/webspeak.git"
+REPO_URL="https://gitee.com/muyan6/webspeak.git"
 INSTALL_DIR="/opt/webspeak"
 DEFAULT_PORT=3040
 DEFAULT_UDP_RANGE="40000-40099"
@@ -99,7 +99,14 @@ install_docker() {
     if [[ "$INSTALL_DIR" == "/opt/webspeak" && ! -d "$INSTALL_DIR" ]]; then
         info "正在克隆 WebSpeak 仓库到 ${INSTALL_DIR}..."
         mkdir -p /opt
-        git clone "$REPO_URL" "$INSTALL_DIR"
+        if ! git clone "$REPO_URL" "$INSTALL_DIR"; then
+            warn "从 Gitee 克隆失败，尝试从 GitHub 克隆..."
+            git clone "https://github.com/muyan6/webspeak.git" "$INSTALL_DIR"
+        fi
+        cd "$INSTALL_DIR"
+        git remote set-url origin https://gitee.com/muyan6/webspeak.git > /dev/null 2>&1 || true
+        git remote set-url --add --push origin https://gitee.com/muyan6/webspeak.git > /dev/null 2>&1 || true
+        git remote set-url --add --push origin https://github.com/muyan6/webspeak.git > /dev/null 2>&1 || true
     fi
 
     cd "$INSTALL_DIR"
@@ -156,9 +163,16 @@ update_app() {
         info "数据库已自动备份至 data/backups/"
     fi
 
-    info "正在从 GitHub 拉取最新代码..."
-    git fetch --all
-    git reset --hard origin/main || git pull origin main
+    info "正在从 Gitee / GitHub 拉取最新代码..."
+    # 确保同时配置 Gitee 和 GitHub 远程源
+    git remote set-url origin https://gitee.com/muyan6/webspeak.git > /dev/null 2>&1 || true
+    git remote set-url --add --push origin https://gitee.com/muyan6/webspeak.git > /dev/null 2>&1 || true
+    git remote set-url --add --push origin https://github.com/muyan6/webspeak.git > /dev/null 2>&1 || true
+
+    if ! git pull origin main; then
+        warn "从 Gitee 拉取失败，尝试从 GitHub 备用源拉取..."
+        git pull https://github.com/muyan6/webspeak.git main || git reset --hard origin/main
+    fi
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
         info "检测到 Docker 部署环境，正在重新构建并重启容器..."

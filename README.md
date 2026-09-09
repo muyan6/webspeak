@@ -190,12 +190,20 @@ WebSpeak 面向希望通过网页提供 TeamSpeak 语音服务的个人、社区
 
 ##### Linux 服务器（Ubuntu / Debian / CentOS / Rocky 等）：
 在终端中执行以下命令（支持一键安装 Docker、配置防火墙、编译启动、查看状态及后续升级）：
+
+**Gitee 快速源（国内服务器推荐）：**
+```bash
+bash <(curl -fsSL https://gitee.com/muyan6/webspeak/raw/main/install.sh)
+```
+
+**GitHub 国际源：**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/muyan6/webspeak/main/install.sh)
 ```
+
 或下载代码后运行交互管理面板：
 ```bash
-git clone https://github.com/muyan6/webspeak.git && cd webspeak && bash install.sh
+git clone https://gitee.com/muyan6/webspeak.git && cd webspeak && bash install.sh
 ```
 
 ##### Linux 一键更新：

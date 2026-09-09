@@ -6,7 +6,8 @@ title WebSpeak 一键管理程序 (muyan6/webspeak)
 cls
 echo ================================================================
 echo           WebSpeak 一键安装与管理程序 (Windows)
-echo           仓库: https://github.com/muyan6/webspeak
+echo           Gitee:  https://gitee.com/muyan6/webspeak
+echo           GitHub: https://github.com/muyan6/webspeak
 echo ================================================================
 echo.
 echo  默认启动端口: 3040
@@ -16,7 +17,7 @@ echo.
 echo ================================================================
 echo  1. [推荐] 使用 Docker Compose 一键构建并启动
 echo  2. 使用本地 Node.js 安装依赖并启动开发/生产环境
-echo  3. 一键更新项目 (拉取 GitHub 最新代码并重构)
+echo  3. 一键更新项目 (拉取 Gitee/GitHub 最新代码并重构)
 echo  4. 停止运行中的 Docker 容器
 echo  5. 查看服务日志 (Docker)
 echo  0. 退出
