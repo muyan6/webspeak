@@ -93,6 +93,7 @@ configure_firewall() {
 pull_docker_image() {
     info "正在拉取 WebSpeak Docker 预构建镜像..."
     local candidate_images=(
+        "ghcr.1ms.run/muyan6/webspeak:latest"
         "ghcr.io/muyan6/webspeak:latest"
         "ghcr.nju.edu.cn/muyan6/webspeak:latest"
     )
@@ -101,6 +102,7 @@ pull_docker_image() {
         info "尝试拉取镜像源: ${img} ..."
         if docker pull "${img}"; then
             success "镜像拉取成功: ${img}"
+            docker tag "${img}" "ghcr.1ms.run/muyan6/webspeak:latest" > /dev/null 2>&1 || true
             docker tag "${img}" "ghcr.io/muyan6/webspeak:latest" > /dev/null 2>&1 || true
             docker tag "${img}" "webspeak:latest" > /dev/null 2>&1 || true
             return 0
@@ -200,15 +202,19 @@ update_app() {
     fi
 
     if [[ -f "docker-compose.yml" ]] && docker compose ps &> /dev/null; then
-        info "检测到 Docker 部署环境，正在更新服务..."
-        if pull_docker_image; then
-            info "已拉取最新预构建镜像，正在重启容器..."
+        info "检测到 Docker 部署环境，正在拉取最新预构建镜像并重启..."
+        if docker compose pull; then
+            docker compose up -d
+            success "WebSpeak 容器已直接更新至最新镜像！"
+        elif pull_docker_image; then
             docker compose up -d --force-recreate
+            success "WebSpeak 容器已直接更新至最新镜像！"
         else
-            info "预构建镜像拉取失败或未就绪，正在使用本地最新代码快速构建容器..."
-            docker compose up -d --build
+            warn "预构建镜像拉取失败或未就绪，正在使用本地最新代码快速构建容器..."
+            docker compose build || true
+            docker compose up -d
+            success "WebSpeak 容器已平滑更新并重启！"
         fi
-        success "Docker 容器已平滑更新并重启！"
     elif systemctl is-active --quiet webspeak; then
         info "检测到 Systemd 服务环境，正在重新编译并重启服务..."
         npm install
