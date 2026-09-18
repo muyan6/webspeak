@@ -6,7 +6,7 @@ import type { AdminCredential } from "../security/admin-password.js";
 import type { TeamSpeakProtocol } from "../server/teamspeak-adapter.js";
 import { DEFAULT_WEBRTC_UDP_PORT_RANGE } from "../server/webrtc-config.js";
 
-export const DATABASE_SCHEMA_VERSION = 5;
+export const DATABASE_SCHEMA_VERSION = 8;
 export type AccessMode = "fixed" | "open";
 
 export interface SessionHistoryRecord {
@@ -25,6 +25,9 @@ export interface PersistedSettings {
   siteName: string;
   welcomeText: string;
   welcomeTextEn: string;
+  welcomeTextDe: string;
+  welcomeTextRu: string;
+  welcomeTextJa: string;
   accessMode: AccessMode;
   tsHost: string;
   tsPort: number;
@@ -36,6 +39,12 @@ export interface PersistedSettings {
   webRtcEnabled: boolean;
   webRtcUdpStart: number;
   webRtcUdpEnd: number;
+  relayConfigured: boolean;
+  relayEnabled: boolean;
+  relayName: string;
+  relayHost: string;
+  relayPort: number;
+  relayTokenEncrypted: string | null;
   updatedAt: string;
 }
 
@@ -43,6 +52,9 @@ export interface SettingsUpdate {
   siteName: string;
   welcomeText: string;
   welcomeTextEn?: string;
+  welcomeTextDe?: string;
+  welcomeTextRu?: string;
+  welcomeTextJa?: string;
   accessMode: AccessMode;
   tsHost: string;
   tsPort: number;
@@ -50,6 +62,23 @@ export interface SettingsUpdate {
   webRtcEnabled: boolean;
   webRtcUdpStart?: number;
   webRtcUdpEnd?: number;
+  relayConfigured: boolean;
+  relayEnabled: boolean;
+  relayName: string;
+  relayHost: string;
+  relayPort: number;
+  relayTokenEncrypted: string | null;
+}
+
+export interface PersistedRelayNode {
+  id: string;
+  name: string;
+  enabled: boolean;
+  host: string;
+  port: number;
+  tokenEncrypted: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ManagedInviteRecord {
@@ -84,6 +113,9 @@ interface SettingsRow extends Record<string, unknown> {
   site_name: string;
   welcome_text: string;
   welcome_text_en: string;
+  welcome_text_de: string;
+  welcome_text_ru: string;
+  welcome_text_ja: string;
   access_mode: string;
   ts_host: string;
   ts_port: number;
@@ -96,6 +128,23 @@ interface SettingsRow extends Record<string, unknown> {
   webrtc_public_host: string;
   webrtc_udp_start: number;
   webrtc_udp_end: number;
+  relay_configured: number;
+  relay_enabled: number;
+  relay_name: string;
+  relay_host: string;
+  relay_port: number;
+  relay_token_encrypted: string | null;
+  updated_at: string;
+}
+
+interface RelayNodeRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  enabled: number;
+  host: string;
+  port: number;
+  token_encrypted: string | null;
+  created_at: string;
   updated_at: string;
 }
 
@@ -159,6 +208,9 @@ export class WebSpeakDatabase {
       siteName: row.site_name,
       welcomeText: row.welcome_text,
       welcomeTextEn: row.welcome_text_en,
+      welcomeTextDe: row.welcome_text_de,
+      welcomeTextRu: row.welcome_text_ru,
+      welcomeTextJa: row.welcome_text_ja,
       accessMode: row.access_mode === "open" ? "open" : "fixed",
       tsHost: row.ts_host,
       tsPort: row.ts_port,
@@ -170,8 +222,53 @@ export class WebSpeakDatabase {
       webRtcEnabled: row.webrtc_enabled === 1,
       webRtcUdpStart: row.webrtc_udp_start,
       webRtcUdpEnd: row.webrtc_udp_end,
+      relayConfigured: row.relay_configured === 1,
+      relayEnabled: row.relay_enabled === 1,
+      relayName: row.relay_name,
+      relayHost: row.relay_host,
+      relayPort: row.relay_port,
+      relayTokenEncrypted: row.relay_token_encrypted,
       updatedAt: row.updated_at,
     };
+  }
+
+  listRelayNodes(): PersistedRelayNode[] {
+    const rows = this.database.prepare(
+      "SELECT * FROM relay_nodes ORDER BY created_at ASC, id ASC",
+    ).all() as RelayNodeRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      enabled: row.enabled === 1,
+      host: row.host,
+      port: row.port,
+      tokenEncrypted: row.token_encrypted,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  replaceRelayNodes(nodes: Array<Omit<PersistedRelayNode, "createdAt" | "updatedAt"> & { createdAt?: string; updatedAt?: string }>): void {
+    const now = new Date().toISOString();
+    this.transaction(() => {
+      this.database.exec("DELETE FROM relay_nodes");
+      const insert = this.database.prepare(
+        `INSERT INTO relay_nodes (id, name, enabled, host, port, token_encrypted, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const node of nodes) {
+        insert.run(
+          node.id,
+          node.name,
+          node.enabled ? 1 : 0,
+          node.host,
+          node.port,
+          node.tokenEncrypted,
+          node.createdAt ?? now,
+          node.updatedAt ?? now,
+        );
+      }
+    });
   }
 
   updateSettings(settings: SettingsUpdate, auditEvent = "SETTINGS_CHANGED"): void {
@@ -406,8 +503,84 @@ export class WebSpeakDatabase {
     }
     if (version === 4) {
       this.transaction(() => {
+        const columns = (this.database.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map((c) => c.name);
+        if (!columns.includes("relay_configured")) {
+          this.database.exec(`
+            ALTER TABLE settings ADD COLUMN relay_configured INTEGER NOT NULL DEFAULT 0 CHECK (relay_configured IN (0, 1));
+            ALTER TABLE settings ADD COLUMN relay_enabled INTEGER NOT NULL DEFAULT 0 CHECK (relay_enabled IN (0, 1));
+            ALTER TABLE settings ADD COLUMN relay_name TEXT NOT NULL DEFAULT '';
+            ALTER TABLE settings ADD COLUMN relay_host TEXT NOT NULL DEFAULT '';
+            ALTER TABLE settings ADD COLUMN relay_port INTEGER NOT NULL DEFAULT 39087 CHECK (relay_port BETWEEN 1 AND 65535);
+            ALTER TABLE settings ADD COLUMN relay_token_encrypted TEXT;
+          `);
+        }
+        this.database.exec("PRAGMA user_version = 5");
+      });
+      version = 5;
+    }
+    if (version === 5) {
+      this.transaction(() => {
         this.database.exec(`
-          CREATE TABLE session_history (
+          CREATE TABLE IF NOT EXISTS relay_nodes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+            token_encrypted TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS relay_nodes_enabled_idx ON relay_nodes(enabled);
+        `);
+        const legacy = this.database.prepare(
+          `SELECT relay_configured, relay_enabled, relay_name, relay_host, relay_port, relay_token_encrypted
+           FROM settings WHERE id = 1`,
+        ).get() as {
+          relay_configured?: number;
+          relay_enabled?: number;
+          relay_name?: string;
+          relay_host?: string;
+          relay_port?: number;
+          relay_token_encrypted?: string | null;
+        } | undefined;
+        if (legacy?.relay_configured === 1 && legacy.relay_host && legacy.relay_token_encrypted) {
+          const now = new Date().toISOString();
+          this.database.prepare(
+            `INSERT OR IGNORE INTO relay_nodes (id, name, enabled, host, port, token_encrypted, created_at, updated_at)
+             VALUES ('relay-default', ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            legacy.relay_name || "中继加速",
+            legacy.relay_enabled === 1 ? 1 : 0,
+            legacy.relay_host,
+            legacy.relay_port || 39087,
+            legacy.relay_token_encrypted,
+            now,
+            now,
+          );
+        }
+        this.database.exec("PRAGMA user_version = 6");
+      });
+      version = 6;
+    }
+    if (version === 6) {
+      this.transaction(() => {
+        const columns = (this.database.prepare("PRAGMA table_info(settings)").all() as { name: string }[]).map((c) => c.name);
+        if (!columns.includes("welcome_text_de")) {
+          this.database.exec(`
+            ALTER TABLE settings ADD COLUMN welcome_text_de TEXT NOT NULL DEFAULT '';
+            ALTER TABLE settings ADD COLUMN welcome_text_ru TEXT NOT NULL DEFAULT '';
+            ALTER TABLE settings ADD COLUMN welcome_text_ja TEXT NOT NULL DEFAULT '';
+          `);
+        }
+        this.database.exec("PRAGMA user_version = 7");
+      });
+      version = 7;
+    }
+    if (version === 7) {
+      this.transaction(() => {
+        this.database.exec(`
+          CREATE TABLE IF NOT EXISTS session_history (
             id TEXT PRIMARY KEY,
             nickname TEXT NOT NULL,
             target TEXT NOT NULL,
@@ -418,11 +591,11 @@ export class WebSpeakDatabase {
             status TEXT NOT NULL,
             reason TEXT
           );
-          CREATE INDEX idx_session_history_started ON session_history(started_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_session_history_started ON session_history(started_at DESC);
         `);
-        this.database.exec("PRAGMA user_version = 5");
+        this.database.exec("PRAGMA user_version = 8");
       });
-      version = 5;
+      version = 8;
     }
   }
 
@@ -490,14 +663,18 @@ export class WebSpeakDatabase {
   private writeSettings(settings: SettingsUpdate, now: string): void {
     this.database.prepare(
       `UPDATE settings SET
-         site_name = ?, welcome_text = ?, welcome_text_en = ?, access_mode = ?, ts_host = ?, ts_port = ?,
+         site_name = ?, welcome_text = ?, welcome_text_en = ?, welcome_text_de = ?, welcome_text_ru = ?, welcome_text_ja = ?, access_mode = ?, ts_host = ?, ts_port = ?,
          ts_password_encrypted = ?, webrtc_enabled = ?, webrtc_udp_start = ?,
-         webrtc_udp_end = ?, updated_at = ?
+         webrtc_udp_end = ?, relay_configured = ?, relay_enabled = ?, relay_name = ?,
+         relay_host = ?, relay_port = ?, relay_token_encrypted = ?, updated_at = ?
        WHERE id = 1`,
     ).run(
       settings.siteName,
       settings.welcomeText,
       settings.welcomeTextEn ?? "",
+      settings.welcomeTextDe ?? "",
+      settings.welcomeTextRu ?? "",
+      settings.welcomeTextJa ?? "",
       settings.accessMode,
       settings.tsHost,
       settings.tsPort,
@@ -505,6 +682,12 @@ export class WebSpeakDatabase {
       settings.webRtcEnabled ? 1 : 0,
       settings.webRtcUdpStart ?? DEFAULT_WEBRTC_UDP_PORT_RANGE[0],
       settings.webRtcUdpEnd ?? DEFAULT_WEBRTC_UDP_PORT_RANGE[1],
+      settings.relayConfigured ? 1 : 0,
+      settings.relayEnabled ? 1 : 0,
+      settings.relayName,
+      settings.relayHost,
+      settings.relayPort,
+      settings.relayTokenEncrypted,
       now,
     );
   }

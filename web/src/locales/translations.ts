@@ -1,4 +1,4 @@
-export type Language = "zh" | "en" | "de";
+export type Language = "zh" | "en" | "de" | "ru" | "ja";
 
 export const translations: Record<Language, Record<string, string>> = {
   zh: {
@@ -11,6 +11,10 @@ export const translations: Record<Language, Record<string, string>> = {
     secureGateway: "安全语音网关",
     adminConsole: "管理控制台",
     currentVersion: "当前版本",
+    errorCode: "错误代码",
+    relayAcceleration: "连接中继",
+    directConnection: "直连 TeamSpeak",
+    relayAccelerationHint: "选择一个已配置的中继节点，适合直连不稳定或被拒绝的服务器。",
     viewChangelog: "查看更新日志",
     notConfigured: "WebSpeak 尚未配置 TeamSpeak 目标。",
     configureNow: "打开管理控制台",
@@ -285,9 +289,11 @@ export const translations: Record<Language, Record<string, string>> = {
     switchToDarkTheme: "Switch to dark theme",
     browserWorkspace: "Browser voice workspace",
     secureGateway: "Secure voice gateway",
-    adminConsole: "Admin console",
     currentVersion: "Current version",
-    viewChangelog: "View changelog",
+    errorCode: "Error code",
+    relayAcceleration: "Connection relay",
+    directConnection: "Direct TeamSpeak connection",
+    relayAccelerationHint: "Choose a configured relay when the direct path is unstable or blocked.",
     notConfigured: "The WebSpeak TeamSpeak target has not been configured.",
     configureNow: "Open admin console",
     privateAudio: "Private community audio",
@@ -561,9 +567,11 @@ export const translations: Record<Language, Record<string, string>> = {
     switchToDarkTheme: "Zum dunklen Design wechseln",
     browserWorkspace: "Sprachbereich im Browser",
     secureGateway: "Sicheres Sprach-Gateway",
-    adminConsole: "Administrationskonsole",
     currentVersion: "Aktuelle Version",
-    viewChangelog: "Änderungsprotokoll ansehen",
+    errorCode: "Fehlercode",
+    relayAcceleration: "Verbindungs-Relay",
+    directConnection: "Direkte TeamSpeak-Verbindung",
+    relayAccelerationHint: "Wähle einen konfigurierten Relay, wenn die direkte Verbindung instabil ist oder abgelehnt wird.",
     notConfigured: "Das TeamSpeak-Ziel von WebSpeak wurde noch nicht konfiguriert.",
     configureNow: "Administrationskonsole öffnen",
     privateAudio: "Private Community-Sprachumgebung",
@@ -829,13 +837,24 @@ export const translations: Record<Language, Record<string, string>> = {
     clickToRebind: "Klicken zum Neubelegen",
     pttHoldToTalkPrompt: "Hotkey zum Sprechen gedrückt halten",
   },
+  ru: {} as Record<string, string>,
+  ja: {} as Record<string, string>,
 };
 
+// Populate fallbacks for ru and ja from en
+translations.ru = { ...translations.en };
+translations.ja = { ...translations.en };
+
 export function getInitialLanguage(): Language {
-  const stored = typeof localStorage !== "undefined" ? localStorage.getItem("webspeak:language") : null;
-  if (stored === "zh" || stored === "en" || stored === "de") return stored;
-  if (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("zh")) return "zh";
-  if (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("de")) return "de";
+  const stored = typeof localStorage !== "undefined" ? localStorage.getItem("webspeak:language") as Language | null : null;
+  if (stored && (stored === "zh" || stored === "en" || stored === "de" || stored === "ru" || stored === "ja")) return stored;
+  if (typeof navigator !== "undefined") {
+    const nav = navigator.language.toLowerCase();
+    if (nav.startsWith("zh")) return "zh";
+    if (nav.startsWith("de")) return "de";
+    if (nav.startsWith("ru")) return "ru";
+    if (nav.startsWith("ja")) return "ja";
+  }
   return "en";
 }
 

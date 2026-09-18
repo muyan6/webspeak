@@ -12,6 +12,7 @@ import { AdminSessionStore } from "../admin/admin-session.js";
 import { resolveSafeOpenTarget } from "../security/open-target-policy.js";
 import { identityFromString } from "@echosixhiya/teamspeak-client";
 import { JoinRateLimiter } from "./join-rate-limit.js";
+import type { ConfiguredAccelerationRelay } from "./acceleration-relay.js";
 
 export interface WebServerOptions {
   port: number;
@@ -63,7 +64,12 @@ export function createWebServer(options: WebServerOptions): WebServer {
 
   app.get("/api/public-config", (_request, response) => {
     response.setHeader("Cache-Control", "no-store");
-    response.json(options.adminService.getPublicConfig());
+    const acceleration = resolveAccelerationOptions(options.voiceBridgeOptions.acceleration);
+    response.json({
+      ...options.adminService.getPublicConfig(),
+      accelerationAvailable: acceleration.length > 0,
+      accelerationRelays: acceleration.map((relay) => ({ id: relay.id, name: relay.name })),
+    });
   });
 
   app.post("/api/join-ticket", async (request, response) => {
@@ -108,6 +114,17 @@ export function createWebServer(options: WebServerOptions): WebServer {
     let target = managedInvite?.target ?? policy.defaultTarget;
     let serverPassword = managedInvite?.serverPassword ?? policy.serverPassword;
     const channel = requestedChannel || managedInvite?.channel || "";
+    const requestedRelayId = typeof body.accelerationRelayId === "string" ? body.accelerationRelayId.trim().slice(0, 110) : "";
+    const accelerationRequested = body.accelerated === true || Boolean(requestedRelayId);
+    const acceleration = resolveAccelerationOptions(options.voiceBridgeOptions.acceleration);
+    if (accelerationRequested && acceleration.length === 0) {
+      response.status(400).json({ ok: false, code: "ACCELERATION_UNAVAILABLE" });
+      return;
+    }
+    if (requestedRelayId && !acceleration.some((relay) => relay.id === requestedRelayId)) {
+      response.status(400).json({ ok: false, code: "ACCELERATION_UNAVAILABLE" });
+      return;
+    }
     if (!managedInvite) {
       try {
         if (policy.accessMode === "open" && typeof body.target === "string" && body.target.trim()) {
@@ -119,6 +136,12 @@ export function createWebServer(options: WebServerOptions): WebServer {
           // not a trust boundary and must not bypass SSRF protection.
           target = await resolveSafeOpenTarget(target);
           if (!isDefault) serverPassword = typeof body.serverPassword === "string" ? body.serverPassword.slice(0, 512) : "";
+          else if (typeof body.serverPassword === "string" && body.serverPassword.trim()) serverPassword = body.serverPassword.slice(0, 512);
+        } else if (policy.accessMode === "fixed" && typeof body.serverPassword === "string" && body.serverPassword.trim()) {
+          // The fixed target remains administrator-controlled, but a user may
+          // retry its server password after the gateway reports that one is
+          // required. The target itself is never taken from this request.
+          serverPassword = body.serverPassword.slice(0, 512);
         }
       } catch {
         response.status(400).json({ ok: false, code: "TARGET_NOT_ALLOWED" });
@@ -132,6 +155,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
       nickname,
       ...(channel ? { channel } : {}),
       ...(identity ? { identity, rememberIdentity: true } : body.rememberIdentity === true ? { rememberIdentity: true } : {}),
+      ...(accelerationRequested ? { accelerated: true, ...(requestedRelayId ? { accelerationRelayId: requestedRelayId } : {}) } : {}),
     });
     response.status(201).json({ ok: true, ticket });
   });
@@ -177,6 +201,14 @@ export function createWebServer(options: WebServerOptions): WebServer {
       });
     },
   };
+}
+
+function resolveAccelerationOptions(
+  configured: ConfiguredAccelerationRelay[] | (() => ConfiguredAccelerationRelay[]) | undefined,
+): ConfiguredAccelerationRelay[] {
+  const value = typeof configured === "function" ? configured() : configured;
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

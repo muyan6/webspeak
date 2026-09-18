@@ -34,13 +34,14 @@ export interface LocalPreferences {
   locale?: "auto" | "zh-CN" | "en";
   theme?: "system" | "light" | "dark";
   microphoneMuted?: boolean;
+  noiseSuppressionEnabled?: boolean;
   voxThreshold?: number;
   micMode?: "vox" | "ptt";
   pttKey?: string;
   echoCancellation?: boolean;
   noiseSuppression?: boolean;
   autoGainControl?: boolean;
-  language?: "zh" | "en" | "de";
+  language?: "zh" | "en" | "de" | "ru" | "ja";
   preferredInputDeviceId?: string;
   preferredOutputDeviceId?: string;
   inputGain?: number;

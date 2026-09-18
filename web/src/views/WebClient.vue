@@ -71,6 +71,17 @@
 
             <details class="identity-options"><summary>{{ t('identityOptions') }}</summary><label class="remember-identity"><input v-model="rememberIdentity" type="checkbox" /><span><strong>{{ t('rememberIdentity') }}</strong><small>{{ t('rememberIdentityHint') }}</small></span></label></details><p v-if="rememberIdentity" class="identity-warning">{{ t('rememberIdentityConcurrentWarning') }}</p>
 
+            <label v-if="accelerationAvailable" class="acceleration-choice">
+              <span class="acceleration-copy">
+                <strong>{{ t("relayAcceleration") }}</strong>
+                <small>{{ t("relayAccelerationHint") }}</small>
+              </span>
+              <select v-model="accelerationRelayId">
+                <option value="">{{ t("directConnection") }}</option>
+                <option v-for="relay in accelerationRelays" :key="relay.id" :value="relay.id">{{ relay.name }}</option>
+              </select>
+            </label>
+
             <button class="primary-button connect-button" :disabled="!canJoin || serverConfigLoading || !identityReady || voiceState.connecting" type="submit">
               <span v-if="voiceState.connecting" class="button-spinner"></span>
               <span>{{ voiceState.connecting ? t('connecting') : t('enterVoice') }}</span>
@@ -421,6 +432,9 @@ const serverPort = ref(initialTarget.port);
 const serverPassword = ref("");
 const accessMode = ref<"fixed" | "open">("fixed");
 const rememberIdentity = ref(localStorage.getItem("webspeak:remember-identity") === "1");
+const accelerationRelayId = ref(localStorage.getItem("webspeak:acceleration-relay") || "");
+const accelerationRelays = ref<Array<{ id: string; name: string }>>([]);
+const accelerationAvailable = computed(() => accelerationRelays.value.length > 0);
 const favoriteServers = ref<FavoriteServer[]>([]);
 const recentServers = ref<RecentServer[]>([]);
 const initialized = ref(false);
@@ -682,6 +696,9 @@ watch([rememberIdentity, identityMaterial], ([remember, material]) => {
   if (remember && material) void saveStoredIdentity(material);
   if (!remember && material) identityMaterial.value = "";
 });
+watch(accelerationRelayId, (id) => {
+  localStorage.setItem("webspeak:acceleration-relay", id);
+});
 watch(() => voiceState.connected, (connected) => {
   if (!connected) {
     stopPerformanceMonitoring();
@@ -825,7 +842,7 @@ function doConnect() {
     serverPort.value = serverPort.value.trim();
   }
   selectedChannelId.value = "";
-  connect(currentServerTarget(), channel.value.trim(), nickname.value, accessMode.value === "open" ? serverPassword.value : "", rememberIdentity.value ? identityMaterial.value : "", rememberIdentity.value, inviteToken);
+  connect(currentServerTarget(), channel.value.trim(), nickname.value, serverPassword.value, rememberIdentity.value ? identityMaterial.value : "", rememberIdentity.value, inviteToken, Boolean(accelerationRelayId.value), accelerationRelayId.value);
 }
 
 function doDisconnect() {
@@ -922,11 +939,12 @@ async function toggleFavorite(): Promise<void> {
 async function clearBrowserData(): Promise<void> {
   if (!window.confirm(t("clearLocalDataConfirm"))) return;
   await clearStoredLocalData();
-  for (const key of ["webspeak:nickname", "webspeak:language", "webspeak:theme", "webspeak:input-device", "webspeak:output-device", "webspeak:remember-identity"]) localStorage.removeItem(key);
+  for (const key of ["webspeak:nickname", "webspeak:language", "webspeak:theme", "webspeak:input-device", "webspeak:output-device", "webspeak:remember-identity", "webspeak:acceleration-relay"]) localStorage.removeItem(key);
   themeMode.value = "system";
   applyTheme(themeMode.value);
   identityMaterial.value = "";
   rememberIdentity.value = false;
+  accelerationRelayId.value = "";
   favoriteServers.value = [];
   recentServers.value = [];
   showToast(t("localDataCleared"));
@@ -936,12 +954,24 @@ async function loadPublicConfig() {
   try {
     const response = await fetch("/api/public-config", { headers: { accept: "application/json" } });
     if (!response.ok) return;
-    const config = await response.json() as { version?: unknown; initialized?: unknown; siteName?: unknown; welcomeText?: unknown; welcomeTextEn?: unknown; accessMode?: unknown; target?: unknown };
+    const config = await response.json() as { version?: unknown; initialized?: unknown; siteName?: unknown; welcomeText?: unknown; welcomeTextEn?: unknown; accessMode?: unknown; target?: unknown; accelerationAvailable?: unknown; accelerationRelays?: unknown };
     initialized.value = config.initialized === true;
     if (typeof config.siteName === "string" && config.siteName.trim()) siteName.value = config.siteName.trim();
     if (typeof config.welcomeText === "string") welcomeTextZh.value = config.welcomeText;
     if (typeof config.welcomeTextEn === "string") welcomeTextEn.value = config.welcomeTextEn;
     accessMode.value = config.accessMode === "open" ? "open" : "fixed";
+    accelerationRelays.value = Array.isArray(config.accelerationRelays)
+      ? config.accelerationRelays.flatMap((value) => {
+          if (!value || typeof value !== "object") return [];
+          const relay = value as { id?: unknown; name?: unknown };
+          return typeof relay.id === "string" && typeof relay.name === "string" && relay.id && relay.name
+            ? [{ id: relay.id, name: relay.name }]
+            : [];
+        })
+      : [];
+    if (!accelerationAvailable.value || !accelerationRelays.value.some((relay) => relay.id === accelerationRelayId.value)) {
+      accelerationRelayId.value = "";
+    }
     const hasInviteTarget = query.has("server") || query.has("target") || query.has("tsHost") || query.has("tsPort");
     if (!hasInviteTarget && typeof config.target === "string" && config.target.trim()) {
       const target = splitTeamSpeakTarget(config.target);
@@ -1373,6 +1403,15 @@ function stopWhisperTalk(): void {
 .remember-identity strong { font-size: 11px; font-weight: 700; }
 .remember-identity small { margin-top: 3px; color: #8b9994; font-size: 10px; line-height: 1.4; }
 .identity-warning { margin: 8px 0 0; color: #9a6a32; font-size: 10px; line-height: 1.45; }
+.acceleration-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 2px; padding: 10px 11px; color: #245f58; background: #edf9f5; border: 1px solid #c4e9df; border-radius: 10px; }
+.acceleration-choice select { min-width: 150px; max-width: 48%; padding: 8px 28px 8px 10px; color: #245f58; background: #fff; border: 1px solid #b9ded5; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 700; }
+.acceleration-copy { min-width: 0; }
+.acceleration-choice strong, .acceleration-choice small { display: block; }
+.acceleration-choice strong { font-size: 11px; font-weight: 800; }
+.acceleration-choice small { margin-top: 3px; color: #6b8c85; font-size: 10px; line-height: 1.45; }
+:global(html[data-theme="dark"] .acceleration-choice) { color: #b8eee3; background: #183530; border-color: #2b645b; }
+:global(html[data-theme="dark"] .acceleration-choice small) { color: #91b9b0; }
+:global(html[data-theme="dark"] .acceleration-choice select) { color: #d9f8f1; background: #203f39; border-color: #3b766d; }
 .local-servers { display: grid; gap: 8px; margin: 1px 0 5px; }
 .local-server-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .local-server-group > span { width: 100%; color: #87958f; font-size: 10px; font-weight: 700; }

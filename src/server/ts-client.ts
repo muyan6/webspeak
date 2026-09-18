@@ -14,8 +14,10 @@ import {
   type TextMessage,
 } from "@echosixhiya/teamspeak-client";
 import type { Logger } from "../logger.js";
+import { describeTeamSpeakError, normalizeTeamSpeakError, normalizeTeamSpeakKickedReason } from "../errors.js";
 import { TeamSpeakAdapter, type TeamSpeakProtocol } from "./teamspeak-adapter.js";
 import type { TeamSpeakTarget } from "../domain/teamspeak-target.js";
+import { createAccelerationRelayClient, type AccelerationRelayClient, type AccelerationRelayOptions } from "./acceleration-relay.js";
 
 export interface TSClientOptions {
   target: TeamSpeakTarget;
@@ -24,6 +26,7 @@ export interface TSClientOptions {
   defaultChannel?: string;
   channelPassword?: string;
   identity?: Identity;
+  acceleration?: AccelerationRelayOptions;
 }
 
 export interface TSVoiceData {
@@ -70,6 +73,11 @@ export class TSClient extends EventEmitter {
   private clientId = 0;
   private connected = false;
   private preferredChannelId = 0n;
+  private accelerationClient: AccelerationRelayClient | null = null;
+  // Reason id of the most recent self leave, kept so the SDK `kicked` event can
+  // tell a plain kick (4) from a kick with ban (5). The SDK only forwards the
+  // reason message to its `kicked` handler, not the reason id.
+  private selfLeaveReasonId: number | null = null;
 
   constructor(private options: TSClientOptions, logger: Logger) {
     super();
@@ -78,9 +86,19 @@ export class TSClient extends EventEmitter {
   }
 
   async connect(): Promise<void> {
+    this.selfLeaveReasonId = null;
     if (!this.adapter || !this.client) {
+      let transportTarget = this.options.target;
+      if (this.options.acceleration && !this.accelerationClient) {
+        this.accelerationClient = await createAccelerationRelayClient({
+          ...this.options.acceleration,
+          host: this.options.target.host,
+          port: this.options.target.port,
+        });
+        transportTarget = { host: this.accelerationClient.localHost, port: this.accelerationClient.localPort };
+      }
       this.adapter = new TeamSpeakAdapter({
-        target: this.options.target,
+        target: transportTarget,
         nickname: this.options.nickname,
         identity: this.identity,
         serverPassword: this.options.serverPassword,
@@ -126,8 +144,9 @@ export class TSClient extends EventEmitter {
       this.emit("directorySnapshot", { channels, clients });
     } catch (error: unknown) {
       this.logger.warn({
-        err: error instanceof Error ? error.message : String(error),
-      }, "Could not reconcile the TeamSpeak directory snapshot");
+        failureCode: "DIRECTORY_SNAPSHOT_UNAVAILABLE",
+        failureDetail: error instanceof Error ? error.message : String(error),
+      }, "TeamSpeak directory snapshot unavailable");
     }
 
     const connectedChannelId = client.channelID();
@@ -181,7 +200,15 @@ export class TSClient extends EventEmitter {
     });
 
     client.on("disconnected", (err) => {
-      this.logger.warn({ err: err?.message }, "Disconnected from TS");
+      if (err) {
+        const normalized = normalizeTeamSpeakError(err);
+        this.logger.warn({
+          failureCode: normalized.code.toUpperCase(),
+          failureDetail: describeTeamSpeakError(normalized),
+        }, "TeamSpeak transport disconnected unexpectedly");
+      } else {
+        this.logger.info("TeamSpeak transport disconnected");
+      }
       this.connected = false;
       this.clientId = 0;
       this.emit("disconnected", err);
@@ -192,7 +219,21 @@ export class TSClient extends EventEmitter {
     });
 
     client.on("clientLeave", (info) => {
+      // 仅记录本客户端的踢出(4)/踢出并封禁(5)退出原因，供 kicked 事件区分普通踢出与封禁
+      if (info.id === this.clientId && (info.reasonID === 4 || info.reasonID === 5)) this.selfLeaveReasonId = info.reasonID;
       this.emit("clientLeave", info);
+    });
+
+    // 转发 SDK 的 kicked 事件：不转发的话管理员填写的踢出原因会被丢弃，浏览器
+    // 只能看到笼统的「连接失败」。这里把原因连同 reason id 一起归一化后向上抛。
+    // The SDK emits `kicked` only for a self leave with reason 4 (kick) or 5
+    // (kick with ban) and hands over the admin written reason message. Without
+    // this listener the reason was dropped, so the browser degraded to a generic
+    // "connection failed" right after the transport went away.
+    client.on("kicked", (reasonMsg) => {
+      const reasonId = this.selfLeaveReasonId;
+      this.selfLeaveReasonId = null;
+      this.emit("kicked", normalizeTeamSpeakKickedReason(reasonMsg, reasonId));
     });
 
     client.on("clientMoved", (info) => {
@@ -268,10 +309,16 @@ export class TSClient extends EventEmitter {
 
   async disconnect(): Promise<void> {
     this.connected = false;
-    if (this.adapter) await this.adapter.disconnect();
-    this.adapter = null;
-    this.client = null;
-    this.clientId = 0;
+    this.selfLeaveReasonId = null;
+    try {
+      if (this.adapter) await this.adapter.disconnect();
+    } finally {
+      this.accelerationClient?.close();
+      this.accelerationClient = null;
+      this.adapter = null;
+      this.client = null;
+      this.clientId = 0;
+    }
   }
 }
 

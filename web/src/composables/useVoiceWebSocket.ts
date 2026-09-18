@@ -1,4 +1,8 @@
 import { reactive, ref } from "vue";
+import { RnnoiseWorkletNode, loadRnnoise } from "@sapphi-red/web-noise-suppressor";
+import rnnoiseSimdWasmUrl from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
+import rnnoiseWasmUrl from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
+import rnnoiseWorkletUrl from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url";
 import { loadLocalPreferences, saveLocalPreferences } from "../services/local-persistence.js";
 
 const micCaptureWorkletUrl = "/mic-capture-worklet.js";
@@ -12,6 +16,15 @@ export interface VoiceState {
   tsClientId: number;
   error: string;
   errorCode: string;
+  /**
+   * Non-fatal audio diagnostics. Unlike error/errorCode these never take over
+   * the connect form: they explain a degraded microphone or playback path while
+   * the voice room itself stays joined and usable.
+   */
+  microphoneError: string;
+  microphoneErrorCode: string;
+  audioNotice: string;
+  audioNoticeCode: string;
   channelSwitchedChannelId: string;
 }
 
@@ -40,6 +53,13 @@ export interface AudioOutputDevice {
 }
 
 export type AudioPermission = "unknown" | "granted" | "denied";
+
+export interface MicrophoneProcessingSettings {
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  rnnoise: boolean | null;
+}
 
 type SinkAudioContext = AudioContext & {
   setSinkId?: (sinkId: string) => Promise<void>;
@@ -91,16 +111,141 @@ export interface LatencyProbeResult {
   teamSpeakErrorCode?: string;
 }
 
+const MAX_VISIBLE_ERROR_CODE_LENGTH = 64;
+const CLIENT_ERROR_CODE_ALIASES: Record<string, string> = {
+  PASSWORD_REQUIRED: "SERVER_PASSWORD_REQUIRED",
+  INVALID_PASSWORD: "INVALID_SERVER_PASSWORD",
+  AUTHENTICATION_FAILED: "INVALID_SERVER_PASSWORD",
+  GATEWAY_FULL: "SERVER_REJECTED",
+  TS_CONNECT_FAILED: "CONNECTION_FAILED",
+  TEAM_SPEAK_CONNECT_FAILED: "CONNECTION_FAILED",
+};
+
+/** Keep codes useful to the user without allowing an unbounded server value into the UI. */
+function safeClientErrorCode(value: unknown): string {
+  const normalized = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized.slice(0, MAX_VISIBLE_ERROR_CODE_LENGTH);
+}
+
+function normalizedClientErrorCode(value: unknown, fallback = "CONNECTION_FAILED"): string {
+  const safe = safeClientErrorCode(value);
+  return CLIENT_ERROR_CODE_ALIASES[safe] ?? (safe || fallback);
+}
+
+function safeClientErrorDetail(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
+// TeamSpeak 对非法昵称没有独立错误码：长度违规统一报 invalid parameter size
+// （服务器错误 id 1541），该特征串是网关能转发的唯一机器可读线索，因此把匹配器
+// 与解释文案放在一起，保证两者同步演进。
+/**
+ * TeamSpeak has no dedicated error for a nickname it refuses: a nickname outside
+ * its length rules is answered with "invalid parameter size" and server error id
+ * 1541. That signature is the only machine-readable hint the gateway can forward,
+ * so keep the matcher next to the message builder that explains it to the user.
+ */
+const NICKNAME_LENGTH_SIGNATURE = /invalid[\s_-]*parameter[\s_-]*size|\bid[\s=:]*1541\b|nickname.{0,30}(?:length|size)/i;
+
+/** Shown whenever TeamSpeak refuses the nickname because of its length. */
+const NICKNAME_LENGTH_MESSAGE = "昵称长度不符合 TeamSpeak 服务器要求，至少 3 个字符，请修改后重试";
+
+/**
+ * Browsers only hand out a DOMException name for getUserMedia failures (and an
+ * often-English message that used to reach the UI verbatim). Map every name the
+ * browsers actually raise to a sentence the user can act on, and keep the
+ * DOMException name as the stable failure code.
+ */
+const MICROPHONE_FAILURE_REASONS: Record<string, string> = {
+  NOTALLOWEDERROR: "浏览器未授予麦克风权限",
+  PERMISSIONDENIEDERROR: "浏览器未授予麦克风权限",
+  PERMISSION_DISMISSED: "浏览器未授予麦克风权限",
+  SECURITYERROR: "浏览器阻止了麦克风访问",
+  NOTFOUNDERROR: "未找到可用的麦克风",
+  DEVICESNOTFOUNDERROR: "未找到可用的麦克风",
+  OVERCONSTRAINEDERROR: "所选麦克风当前不可用",
+  NOTREADABLEERROR: "麦克风可能正被其他程序占用",
+  TRACKSTARTERROR: "麦克风可能正被其他程序占用",
+  ABORTERROR: "麦克风启动被中断，请重试",
+  INVALIDSTATEERROR: "麦克风启动被中断，请重试",
+  TYPEFERROR: "麦克风访问参数被系统拒绝",
+};
+
+const MICROPHONE_FAILURE_FALLBACK = "麦克风不可用，请检查浏览器权限与音频设备";
+
+const MICROPHONE_FAILURE_CODE_PREFIX = "MIC_";
+
+/** Turn a getUserMedia / DOMException failure into a stable code plus a readable sentence. */
+export function normalizeMicrophoneFailure(error: unknown): { code: string; message: string } {
+  const rawName = error instanceof Error ? String(error.name || "") : "";
+  const name = safeClientErrorCode(rawName).slice(0, 40);
+  const reason = MICROPHONE_FAILURE_REASONS[name] ?? MICROPHONE_FAILURE_FALLBACK;
+  return { code: `${MICROPHONE_FAILURE_CODE_PREFIX}${name || "UNAVAILABLE"}`, message: `麦克风访问失败：${reason}` };
+}
+
+/**
+ * Every code this client can render for a failed connection. A code is regarded
+ * as "explainable" only when it appears here, which is also what keeps the
+ * gateway close codes from being replaced by an unknown close reason.
+ */
+const CONNECTION_FAILURE_MESSAGES: Record<string, string> = {
+  ORIGIN_REJECTED: "请求来源不受信任，请从正确的网站入口重新打开",
+  NOT_INITIALIZED: "WebSpeak 尚未完成配置，请联系管理员",
+  RATE_LIMITED: "请求过于频繁，请稍后重试",
+  INVALID_TARGET: "TeamSpeak 服务器地址无效",
+  INVALID_NICKNAME: NICKNAME_LENGTH_MESSAGE,
+  HOST_NOT_FOUND: "找不到 TeamSpeak 服务器主机名，请检查地址",
+  UNREACHABLE: "无法到达 TeamSpeak 服务器，请检查网络或地址",
+  CONNECTION_REFUSED: "TeamSpeak 服务器拒绝了连接，请检查端口和服务状态",
+  CONNECTION_RESET: "TeamSpeak 连接被服务器或网络重置，请稍后重试",
+  TIMEOUT: "连接 TeamSpeak 超时，请检查网络或服务器状态",
+  SERVER_PASSWORD_REQUIRED: "该服务器需要密码，请输入密码后重试",
+  INVALID_SERVER_PASSWORD: "服务器密码错误，请重新输入",
+  PROTOCOL_NEGOTIATION_FAILED: "TeamSpeak 协议协商失败",
+  SERVER_REJECTED: "TeamSpeak 服务器拒绝了连接",
+  CHANNEL_PASSWORD_REQUIRED: "该频道需要密码",
+  NICKNAME_IN_USE: "该昵称已被服务器上的其他用户占用，请更换昵称",
+  IDENTITY_SECURITY_LEVEL_TOO_LOW: "你的身份安全等级低于该服务器要求，请提升后重试",
+  IDENTITY_LIMIT_REACHED: "该身份建立的连接数已达上限，请关闭其他连接后重试",
+  CLIENT_VERSION_OUTDATED: "客户端版本过旧，服务器拒绝连接，请升级后重试",
+  FLOOD_PROTECTION: "操作过于频繁，已被服务器洪水防护暂时拒绝，请稍后重试",
+  BANNED: "你已被该服务器封禁，无法连接",
+  KICKED: "你已被服务器移出",
+  SERVER_SHUTTING_DOWN: "TeamSpeak 服务器正在关闭，暂时无法连接",
+  CONNECTION_INITIALISATION_FAILED: "TeamSpeak 服务器未能完成连接初始化，请检查地址、端口或稍后重试",
+  SERVER_FULL: "服务器当前已满，请稍后重试",
+  INVALID_PARAMETER: "TeamSpeak 服务器拒绝了参数，通常是昵称长度或格式不合规",
+  IDENTITY_IN_USE: "此 TeamSpeak 身份已在另一个浏览器页面使用，请关闭另一条连接或取消“保持身份”后重试",
+  CONNECTION_FAILED: "TeamSpeak 连接失败，请检查地址、网络或服务器状态",
+  // Gateway close codes: these replace the generic "connection failed" when the
+  // gateway drops the socket itself (see GATEWAY_CLOSE_CODE_CODES).
+  JOIN_TICKET_REQUIRED: "语音会话票据缺失或已过期，请返回列表重新进入语音空间",
+  IDENTITY_INVALID: "语音网关拒绝了本次连接：身份无效，请取消“保持身份”后重新进入",
+  IDENTITY_REJECTED: "语音网关拒绝了本次连接：身份无效或无法在此页面使用，请取消“保持身份”后重新进入",
+  ACCELERATION_UNAVAILABLE: "当前中继加速不可用，请关闭加速后重试或联系管理员",
+  GATEWAY_NETWORK_LOST: "与语音网关的网络连接异常中断（掉线或代理断开），并非 TeamSpeak 服务器拒绝连接，请检查网络后重新进入",
+  GATEWAY_SESSION_ENDED: "语音网关会话意外结束，请重新进入语音空间",
+  TEAM_SPEAK_CLIENT_UNAVAILABLE: "语音网关未能创建 TeamSpeak 客户端（服务器可能已关闭或地址不可达），请确认服务器地址或稍后重试",
+};
+
 export function useVoiceWebSocket() {
   const ws = ref<WebSocket | null>(null);
-  const state = reactive<VoiceState>({ connected: false, connecting: false, reconnecting: false, reconnectAttempt: 0, reconnectFailed: false, tsClientId: 0, error: "", errorCode: "", channelSwitchedChannelId: "" });
+  const state = reactive<VoiceState>({ connected: false, connecting: false, reconnecting: false, reconnectAttempt: 0, reconnectFailed: false, tsClientId: 0, error: "", errorCode: "", microphoneError: "", microphoneErrorCode: "", audioNotice: "", audioNoticeCode: "", channelSwitchedChannelId: "" });
   const members = reactive<ChannelMember[]>([]);
   const channels = reactive<ChannelInfo[]>([]);
   const chatMessages = reactive<ChatMessage[]>([]);
   const serverEvents = reactive<ServerEvent[]>([]);
   const pokeNotifications = reactive<{ id: string; invokerId: number; invokerUid: string; invokerName: string; message: string; timestamp: number }[]>([]);
   let connectionSequence = 0;
-  let lastConnection: { target: string; channel: string; nickname: string; serverPassword: string; identity?: string; rememberIdentity: boolean } | null = null;
+  let lastConnection: { target: string; channel: string; nickname: string; serverPassword: string; identity?: string; rememberIdentity: boolean; accelerated: boolean; accelerationRelayId: string } | null = null;
   let latencyProbeSequence = 0;
   const pendingLatencyProbes = new Map<string, { startedAt: number; resolve: (result: LatencyProbeResult | null) => void; timer: ReturnType<typeof setTimeout> }>();
   let webrtcPeer: RTCPeerConnection | null = null;
@@ -123,9 +268,13 @@ export function useVoiceWebSocket() {
   let workletNode: AudioWorkletNode | null = null;
   let workletContext: AudioContext | null = null;
   let workletModulePromise: Promise<void> | null = null;
+  let rnnoiseNode: RnnoiseWorkletNode | null = null;
+  let rnnoiseWorkletModulePromise: Promise<void> | null = null;
+  let rnnoiseWasmPromise: Promise<ArrayBuffer> | null = null;
   let micSource: MediaStreamAudioSourceNode | null = null;
   let micGain: GainNode | null = null;
   let silentGain: GainNode | null = null;
+  let processedMicDestination: MediaStreamAudioDestinationNode | null = null;
   const accompanimentActive = ref(false);
   const accompanimentSupported = ref(typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia));
   const accompanimentErrorCode = ref<"" | "unsupported" | "needsWebRtc" | "noAudio" | "permission">("");
@@ -144,6 +293,12 @@ export function useVoiceWebSocket() {
   const selectedOutputDeviceId = ref(typeof localStorage !== "undefined" ? localStorage.getItem("webspeak:output-device") ?? "" : "");
   const outputDeviceSupported = ref(false);
   const audioPermission = ref<AudioPermission>("unknown");
+  const microphoneProcessing = reactive<MicrophoneProcessingSettings>({
+    echoCancellation: null,
+    noiseSuppression: null,
+    autoGainControl: null,
+    rnnoise: null,
+  });
   const audioContextState = ref<AudioContextState | "unknown">("unknown");
   const micLevel = ref(0);
   const microphoneTestActive = ref(false);
@@ -151,6 +306,7 @@ export function useVoiceWebSocket() {
   let testRecorder: MediaRecorder | null = null;
   let testRecorderTimer: ReturnType<typeof setTimeout> | null = null;
   const microphoneMuted = ref(false);
+  const noiseSuppressionEnabled = ref(true);
   const inputVolume = ref(1);
   const outputVolume = ref(1);
   const outputMuted = ref(false);
@@ -201,6 +357,7 @@ export function useVoiceWebSocket() {
       preferredInputDeviceId: selectedInputDeviceId.value,
       inputDeviceId: selectedInputDeviceId.value,
       microphoneMuted: microphoneMuted.value,
+      noiseSuppressionEnabled: noiseSuppressionEnabled.value,
       voxThreshold: voxThreshold.value,
       inputGain: inputVolume.value,
       outputVolume: outputVolume.value,
@@ -226,6 +383,7 @@ export function useVoiceWebSocket() {
   void loadLocalPreferences().then((preferences) => {
     if (!selectedInputDeviceId.value) selectedInputDeviceId.value = preferences.preferredInputDeviceId ?? preferences.inputDeviceId ?? "";
     if (typeof preferences.microphoneMuted === "boolean") microphoneMuted.value = preferences.microphoneMuted;
+    if (typeof preferences.noiseSuppressionEnabled === "boolean") noiseSuppressionEnabled.value = preferences.noiseSuppressionEnabled;
     if (typeof preferences.voxThreshold === "number") voxThreshold.value = clamp(preferences.voxThreshold, 0.001, 0.08);
     if (typeof preferences.inputGain === "number") inputVolume.value = Math.max(0, Math.min(1, preferences.inputGain));
     if (typeof preferences.outputVolume === "number") outputVolume.value = Math.max(0, Math.min(1, preferences.outputVolume));
@@ -296,6 +454,51 @@ export function useVoiceWebSocket() {
     return Math.max(minimum, Math.min(maximum, value));
   }
 
+  /**
+   * Microphone failures are a degraded state, not a connection failure: the room
+   * stays joined, so they get their own slot instead of taking over `error`.
+   */
+  function setMicrophoneError(error: unknown): string {
+    const failure = normalizeMicrophoneFailure(error);
+    state.microphoneErrorCode = failure.code;
+    state.microphoneError = failure.message;
+    return failure.message;
+  }
+
+  function clearMicrophoneError(): void {
+    state.microphoneError = "";
+    state.microphoneErrorCode = "";
+  }
+
+  /** Non-fatal audio notice (WebRTC fallback, blocked autoplay, device list failure...). */
+  function setAudioNotice(code: string, message: string): void {
+    state.audioNoticeCode = safeClientErrorCode(code) || "AUDIO_NOTICE";
+    state.audioNotice = message;
+  }
+
+  function clearAudioNotice(code?: string): void {
+    if (code && state.audioNoticeCode !== safeClientErrorCode(code)) return;
+    state.audioNotice = "";
+    state.audioNoticeCode = "";
+  }
+
+  /** A suspended AudioContext silently swallows capture: say so instead of pretending. */
+  function syncAudioContextNotice(): void {
+    if (audioCtx && audioCtx.state === "suspended") {
+      setAudioNotice("AUDIO_CONTEXT_SUSPENDED", "浏览器的音频处理被暂停（需要一次页面交互），麦克风与扬声器可能无声：请点击页面任意位置后重试");
+    } else {
+      clearAudioNotice("AUDIO_CONTEXT_SUSPENDED");
+    }
+  }
+
+  function audioNoticeMessage(code: string, detail?: unknown): string {
+    const detailText = safeClientErrorDetail(detail);
+    if (code === "AUDIO_ENCODER_UNAVAILABLE") {
+      return `麦克风声音未能发送：语音网关的音频编码器不可用（错误代码：${code}）${detailText ? `：${detailText}` : ""}，请联系管理员`;
+    }
+    return `音频链路异常（错误代码：${code}）${detailText ? `：${detailText}` : ""}，麦克风声音可能没有发送给其他成员`;
+  }
+
   async function setAudioSink(ctx: SinkAudioContext, deviceId: string): Promise<void> {
     const mediaSinkSupported = typeof (HTMLMediaElement.prototype as SinkAudioElement).setSinkId === "function";
     if (!ctx.setSinkId && !mediaSinkSupported) {
@@ -329,12 +532,19 @@ export function useVoiceWebSocket() {
     // route: a running-but-silent graph could leave the UI reporting a live
     // speaker while the actual remote audio element remained muted.
     output.muted = false;
+    if (audioCtx && audioCtx.state === "suspended") {
+      try { await audioCtx.resume(); } catch { /* a user gesture is still required */ }
+    }
     try {
       await output.play();
       webrtcPlaybackRetryCleanup?.();
+      clearAudioNotice("PLAYBACK_BLOCKED");
+      syncAudioContextNotice();
     } catch {
       // Mobile and privacy-focused browsers can require a gesture even for a
-      // MediaStream. Keep retrying after the next real interaction.
+      // MediaStream. Keep retrying after the next real interaction, but tell the
+      // user why the remote audio is missing instead of staying silent.
+      setAudioNotice("PLAYBACK_BLOCKED", "浏览器阻止了音频自动播放，暂时听不到其他成员的声音：请点击页面任意位置，或在地址栏允许本站播放声音");
       installWebRtcPlaybackRetry();
     }
   }
@@ -353,7 +563,7 @@ export function useVoiceWebSocket() {
       sampleRate: { ideal: 48000 },
       channelCount: { ideal: 1 },
       echoCancellation: echoCancellation.value,
-      noiseSuppression: noiseSuppression.value,
+      noiseSuppression: noiseSuppressionEnabled.value && noiseSuppression.value,
       autoGainControl: autoGainControl.value,
     };
     if (selectedInputDeviceId.value) constraints.deviceId = { exact: selectedInputDeviceId.value };
@@ -413,9 +623,21 @@ export function useVoiceWebSocket() {
     if (!navigator.mediaDevices?.enumerateDevices) {
       inputDevices.length = 0;
       outputDevices.length = 0;
+      setAudioNotice("DEVICE_LIST_UNAVAILABLE", "无法读取音频设备列表，将使用浏览器默认音频设备：请在系统或浏览器隐私设置中允许读取设备信息");
       return;
     }
-    const devices = await navigator.mediaDevices.enumerateDevices();
+    let devices: MediaDeviceInfo[];
+    try {
+      devices = await navigator.mediaDevices.enumerateDevices();
+      clearAudioNotice("DEVICE_LIST_UNAVAILABLE");
+    } catch {
+      // enumerateDevices rejects when the device list is blocked (for example in a
+      // locked-down iframe). Use the browser defaults and explain the limitation.
+      inputDevices.length = 0;
+      outputDevices.length = 0;
+      setAudioNotice("DEVICE_LIST_UNAVAILABLE", "无法读取音频设备列表，将使用浏览器默认音频设备：请在系统或浏览器隐私设置中允许读取设备信息");
+      return;
+    }
     const microphones = devices
       .filter((device) => device.kind === "audioinput")
       .map((device) => ({ deviceId: device.deviceId, label: device.label, groupId: device.groupId }));
@@ -442,23 +664,72 @@ export function useVoiceWebSocket() {
     await refreshAudioDevices();
   }
 
+  async function createRnnoiseNode(ctx: AudioContext): Promise<RnnoiseWorkletNode | null> {
+    if (typeof AudioWorkletNode === "undefined" || !ctx.audioWorklet) {
+      microphoneProcessing.rnnoise = false;
+      return null;
+    }
+    try {
+      if (!rnnoiseWasmPromise) {
+        rnnoiseWasmPromise = loadRnnoise({ url: rnnoiseWasmUrl, simdUrl: rnnoiseSimdWasmUrl }).catch((error) => {
+          rnnoiseWasmPromise = null;
+          throw error;
+        });
+      }
+      if (!rnnoiseWorkletModulePromise) {
+        rnnoiseWorkletModulePromise = ctx.audioWorklet.addModule(rnnoiseWorkletUrl).catch((error) => {
+          rnnoiseWorkletModulePromise = null;
+          throw error;
+        });
+      }
+      const [wasmBinary] = await Promise.all([rnnoiseWasmPromise, rnnoiseWorkletModulePromise]);
+      const node = new RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary });
+      microphoneProcessing.rnnoise = true;
+      return node;
+    } catch {
+      // Native browser NS remains active as a fallback. RNNoise is an optional
+      // enhancement and must never prevent a microphone from starting.
+      microphoneProcessing.rnnoise = false;
+      return null;
+    }
+  }
+
   async function startMicrophone(): Promise<void> {
     const ctx = getAudioCtx();
-    if (ctx.state === "suspended") await ctx.resume();
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch { /* the audio context notice explains the silence */ }
+    }
     // Acquire the replacement stream before tearing down the current graph so
     // changing devices does not interrupt an active microphone on failure.
     let nextStream: MediaStream;
     try {
       nextStream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints() });
       audioPermission.value = "granted";
+      clearMicrophoneError();
     } catch (error) {
       if (error instanceof DOMException && ["NotAllowedError", "SecurityError"].includes(error.name)) audioPermission.value = "denied";
+      // Never let the raw DOMException (usually an English message) reach the UI:
+      // record a readable failure first, then let the caller decide how to show it.
+      setMicrophoneError(error);
       throw error;
     }
+    const microphoneTrack = nextStream.getAudioTracks()[0];
+    const settings = microphoneTrack?.getSettings();
+    microphoneProcessing.echoCancellation = typeof settings?.echoCancellation === "boolean" ? settings.echoCancellation : null;
+    microphoneProcessing.noiseSuppression = typeof settings?.noiseSuppression === "boolean" ? settings.noiseSuppression : null;
+    microphoneProcessing.autoGainControl = typeof settings?.autoGainControl === "boolean" ? settings.autoGainControl : null;
     stopMicrophone(false);
     micStream = nextStream;
 
     micSource = ctx.createMediaStreamSource(micStream);
+    rnnoiseNode = noiseSuppressionEnabled.value ? await createRnnoiseNode(ctx) : null;
+    if (!noiseSuppressionEnabled.value) microphoneProcessing.rnnoise = false;
+    const processedSource: AudioNode = rnnoiseNode ?? micSource;
+    if (rnnoiseNode) micSource.connect(rnnoiseNode);
+    processedMicDestination = ctx.createMediaStreamDestination();
+    processedMicDestination.channelCount = 1;
+    processedMicDestination.channelCountMode = "explicit";
+    processedSource.connect(processedMicDestination);
     micGain = ctx.createGain();
     micGain.gain.value = inputVolume.value;
     silentGain = ctx.createGain();
@@ -542,14 +813,16 @@ export function useVoiceWebSocket() {
       scriptNode.onaudioprocess = (event) => handleCaptureChunk(event.inputBuffer.getChannelData(0));
     }
 
-    micSource.connect(micGain);
+    processedSource.connect(micGain);
     const captureNode = workletNode ?? scriptNode!;
     micGain.connect(captureNode);
     captureNode.connect(silentGain);
     silentGain.connect(ctx.destination);
     await refreshAudioDevices();
+    syncAudioContextNotice();
   }
 
+  // 导出给 WebClient：开麦前先 await 此函数完成真实采集，避免出现“假成功”
   async function ensureMicrophone(): Promise<void> {
     if (micStream) return;
     if (!microphoneStartPromise) {
@@ -602,7 +875,11 @@ export function useVoiceWebSocket() {
     const destination = ctx.createMediaStreamDestination();
     destination.channelCount = 1;
     destination.channelCountMode = "explicit";
-    const microphoneSource = ctx.createMediaStreamSource(micStream);
+    // Use the browser-native processed track plus the browser-side RNNoise
+    // graph. Display/application audio is added separately below and never
+    // passes through this microphone denoiser.
+    const microphoneStream = processedMicDestination?.stream ?? micStream;
+    const microphoneSource = ctx.createMediaStreamSource(microphoneStream);
     const microphoneGain = ctx.createGain();
     const active = !microphoneMuted.value && (micMode.value === "vox" || pttActive.value);
     microphoneGain.gain.value = active ? inputVolume.value : 0;
@@ -765,7 +1042,7 @@ export function useVoiceWebSocket() {
     };
     startWebRtcMicMonitor(getAudioCtx(), micStream, microphoneTrack);
     peer.onconnectionstatechange = () => {
-      if (peer.connectionState === "failed") void fallbackFromWebRtc(sequence, socket);
+      if (peer.connectionState === "failed") void fallbackFromWebRtc(sequence, socket, "WEBRTC_CONNECTION_FAILED");
     };
 
     const negotiation = (async () => {
@@ -782,14 +1059,14 @@ export function useVoiceWebSocket() {
         accompanimentActive: accompanimentActive.value,
       } }));
       window.setTimeout(() => {
-        if (webrtcPeer === peer && !peer.remoteDescription) void fallbackFromWebRtc(sequence, socket);
+        if (webrtcPeer === peer && !peer.remoteDescription) void fallbackFromWebRtc(sequence, socket, "WEBRTC_ANSWER_TIMEOUT");
       }, 8_000);
     })();
     webrtcNegotiationPromise = negotiation;
     try {
       await negotiation;
     } catch (error) {
-      if (webrtcPeer === peer) await fallbackFromWebRtc(sequence, socket);
+      if (webrtcPeer === peer) await fallbackFromWebRtc(sequence, socket, "WEBRTC_NEGOTIATION_FAILED");
       throw error;
     } finally {
       if (webrtcNegotiationPromise === negotiation) webrtcNegotiationPromise = null;
@@ -822,19 +1099,22 @@ export function useVoiceWebSocket() {
       webrtcActive.value = true;
       syncWebRtcMemberVolumes();
     } catch {
-      if (lastConnection && ws.value) await fallbackFromWebRtc(connectionSequence, ws.value);
+      if (lastConnection && ws.value) await fallbackFromWebRtc(connectionSequence, ws.value, "WEBRTC_ANSWER_REJECTED");
     }
   }
 
-  async function fallbackFromWebRtc(sequence: number, socket: WebSocket): Promise<void> {
+  async function fallbackFromWebRtc(sequence: number, socket: WebSocket, reasonCode = "WEBRTC_UNAVAILABLE"): Promise<void> {
     if (sequence !== connectionSequence || webrtcFallbackStarted) return;
     webrtcFallbackStarted = true;
     webrtcActive.value = false;
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "webrtcStop" }));
     stopWebRtcTransport();
     if (socket.readyState === WebSocket.OPEN && state.connected) {
+      // Degrading to the compatibility transport must be visible: the user is
+      // still connected, but with different latency and audio quality.
+      setAudioNotice("WEBRTC_FALLBACK", `实时语音（WebRTC）不可用（错误代码：${safeClientErrorCode(reasonCode) || "WEBRTC_UNAVAILABLE"}），已切换为兼容传输：延迟与音质可能下降`);
       try { await startMicrophone(); } catch (error: unknown) {
-        state.error = `麦克风访问失败：${error instanceof Error ? error.message : "请检查浏览器权限"}`;
+        setMicrophoneError(error);
       }
     }
   }
@@ -919,17 +1199,27 @@ export function useVoiceWebSocket() {
     workletNode?.port.close();
     workletNode?.disconnect();
     micGain?.disconnect();
-    micSource?.disconnect();
     silentGain?.disconnect();
     scriptNode = null;
     workletNode = null;
     micGain = null;
-    micSource = null;
     silentGain = null;
+  }
+
+  function stopMicrophoneProcessingGraph(): void {
+    rnnoiseNode?.destroy();
+    rnnoiseNode?.disconnect();
+    rnnoiseNode = null;
+    micSource?.disconnect();
+    processedMicDestination?.disconnect();
+    processedMicDestination?.stream.getTracks().forEach((track) => track.stop());
+    micSource = null;
+    processedMicDestination = null;
   }
 
   function stopMicrophone(closeContext = true): void {
     stopCaptureGraph();
+    stopMicrophoneProcessingGraph();
     releaseAccompanimentStream();
     stopWebRtcMix();
     micStream?.getTracks().forEach((track) => track.stop());
@@ -939,6 +1229,7 @@ export function useVoiceWebSocket() {
       audioCtx = null;
       workletContext = null;
       workletModulePromise = null;
+      rnnoiseWorkletModulePromise = null;
     }
   }
 
@@ -1163,37 +1454,45 @@ export function useVoiceWebSocket() {
     clearRemotePlayback(clientId);
   }
 
-  function connect(target: string, channel: string, nickname: string, serverPassword = "", identity = "", rememberIdentity = false, inviteToken = ""): void {
+  function connect(target: string, channel: string, nickname: string, serverPassword = "", identity = "", rememberIdentity = false, inviteToken = "", accelerated = false, accelerationRelayId = ""): void {
     disconnect(true);
-    lastConnection = { target, channel, nickname, serverPassword, ...(identity ? { identity } : {}), rememberIdentity };
+    lastConnection = { target, channel, nickname, serverPassword, ...(identity ? { identity } : {}), rememberIdentity, accelerated, accelerationRelayId };
     identityMaterial.value = identity;
     const sequence = ++connectionSequence;
     state.error = "";
     state.errorCode = "";
+    // Audio diagnostics belong to the previous session, never to the new one.
+    clearMicrophoneError();
+    clearAudioNotice();
     state.connecting = true;
     state.reconnecting = false;
     state.reconnectAttempt = 0;
     state.reconnectFailed = false;
-    void openTicketedConnection(sequence, target, channel, nickname, serverPassword, inviteToken);
+    void openTicketedConnection(sequence, target, channel, nickname, serverPassword, inviteToken, accelerated);
   }
 
-  async function openTicketedConnection(sequence: number, target: string, channel: string, nickname: string, serverPassword: string, inviteToken: string): Promise<void> {
+  async function openTicketedConnection(sequence: number, target: string, channel: string, nickname: string, serverPassword: string, inviteToken: string, accelerated: boolean): Promise<void> {
     try {
       const response = await fetch("/api/join-ticket", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ target, nickname, channel, serverPassword, ...(inviteToken ? { invite: inviteToken } : {}), ...(lastConnection?.rememberIdentity && lastConnection.identity ? { identity: lastConnection.identity } : {}), ...(lastConnection?.rememberIdentity ? { rememberIdentity: true } : {}) }),
+        body: JSON.stringify({ target, nickname, channel, serverPassword, ...(inviteToken ? { invite: inviteToken } : {}), ...(accelerated ? { accelerated: true, ...(lastConnection?.accelerationRelayId ? { accelerationRelayId: lastConnection.accelerationRelayId } : {}) } : {}), ...(lastConnection?.rememberIdentity && lastConnection.identity ? { identity: lastConnection.identity } : {}), ...(lastConnection?.rememberIdentity ? { rememberIdentity: true } : {}) }),
       });
-      const result = await response.json().catch(() => ({})) as { ticket?: unknown; code?: unknown };
+      const result = await response.json().catch(() => ({})) as { ticket?: unknown; code?: unknown; detail?: unknown };
       if (!response.ok || typeof result.ticket !== "string") {
-        throw new Error(joinTicketReason(typeof result.code === "string" ? result.code : ""));
+        const failureCode = normalizedClientErrorCode(result.code);
+        const failure = new Error(joinTicketReason(failureCode, result.detail));
+        Object.assign(failure, { code: failureCode });
+        throw failure;
       }
       if (sequence !== connectionSequence) return;
       openVoiceSocket(sequence, result.ticket);
     } catch (error: unknown) {
       if (sequence !== connectionSequence) return;
       state.connecting = false;
-      state.error = error instanceof Error ? error.message : "连接服务器失败，请检查邀请链接或服务器状态";
+      const errorRecord = error && typeof error === "object" ? error as { code?: unknown } : {};
+      state.errorCode = normalizedClientErrorCode(errorRecord.code, "REQUEST_FAILED");
+      state.error = error instanceof Error ? error.message : connectionFailureMessage(state.errorCode);
     }
   }
 
@@ -1228,9 +1527,14 @@ export function useVoiceWebSocket() {
       // Prefer the close code over the generic WebSocket error event. The
       // gateway uses a dedicated code when a remembered identity is already
       // active in another browser page.
-      if (event.code !== 1000 && !state.reconnectFailed) state.error = closeReason(event.code);
+      if (event.code !== 1000 && !state.reconnectFailed && !state.errorCode) {
+        state.errorCode = closeErrorCode(event.code, event.reason);
+        state.error = closeReason(event.code, event.reason);
+      }
       stopWebRtcTransport();
       stopMicrophone();
+      clearMicrophoneError();
+      clearAudioNotice();
       whisperTargetIds.clear();
       whisperActive.value = false;
     };
@@ -1240,20 +1544,66 @@ export function useVoiceWebSocket() {
     };
   }
 
-  function joinTicketReason(code: string): string {
-    if (code === "NOT_INITIALIZED") return "WebSpeak 尚未完成首次配置";
-    if (code === "TARGET_NOT_ALLOWED") return "此 TeamSpeak 服务器地址不允许连接";
-    if (code === "INVALID_NICKNAME") return "请输入有效的昵称";
-    if (code === "INVITE_INVALID") return "邀请链接已失效或已被撤销";
-    return "连接服务器失败，请检查邀请链接或服务器状态";
+  function joinTicketReason(code: string, detail?: unknown): string {
+    const messages: Record<string, string> = {
+      ORIGIN_REJECTED: "请求来源不受信任，请从正确的网站入口重新打开",
+      NOT_INITIALIZED: "WebSpeak 尚未完成配置，请联系管理员",
+      RATE_LIMITED: "请求过于频繁，请稍后重试",
+      TARGET_NOT_ALLOWED: "此 TeamSpeak 服务器地址不允许连接",
+      ACCELERATION_UNAVAILABLE: "当前中继加速不可用，请关闭加速或联系管理员",
+      INVALID_NICKNAME: "请输入有效的昵称",
+      INVITE_INVALID: "邀请链接已失效或已被撤销",
+    };
+    const normalized = normalizedClientErrorCode(code);
+    return messages[normalized] ?? connectionFailureMessage(normalized, detail);
   }
 
-  function closeReason(code: number): string {
-    if (code === 4002) return "TeamSpeak 服务器地址无效";
-    if (code === 4003) return "TeamSpeak 服务器连接失败";
-    if (code === 4004) return "服务器当前已满，请稍后重试";
-    if (code === 4005) return "此 TeamSpeak 身份已在另一个浏览器页面使用，请关闭另一条连接或取消“保持身份”后重试";
-    return "连接已断开";
+  // 网关关闭码 → 前端可解释错误码的映射：4000-4003 是网关/会话级，4004/4005 是
+  // TeamSpeak 拒绝与身份冲突，4006 是中继加速，1006/1011 是传输级掉线，绝不能
+  // 被误当成 TeamSpeak 服务器拒绝。
+  /**
+   * Gateway close codes. 4000-4003 are gateway/session level, 4004/4005 are a
+   * TeamSpeak rejection and an identity conflict, 4006 is the acceleration relay,
+   * and 1006 is a transport-level drop that must not be blamed on TeamSpeak.
+   */
+  const GATEWAY_CLOSE_CODE_CODES: Record<number, string> = {
+    4000: "CONNECTION_FAILED",
+    4001: "JOIN_TICKET_REQUIRED",
+    4002: "INVALID_TARGET",
+    4003: "IDENTITY_REJECTED",
+    4004: "SERVER_REJECTED",
+    4005: "IDENTITY_IN_USE",
+    4006: "ACCELERATION_UNAVAILABLE",
+    1006: "GATEWAY_NETWORK_LOST",
+    1011: "GATEWAY_SESSION_ENDED",
+  };
+
+  function closeErrorCode(code: number, reason = ""): string {
+    const closeCode = normalizedClientErrorCode(reason, "");
+    // The gateway repeats the failure code in the close reason. Trust it when the
+    // browser can explain that code, otherwise fall back to the numeric close code
+    // so even a silent close maps to an actionable message.
+    if (closeCode && CONNECTION_FAILURE_MESSAGES[closeCode]) return closeCode;
+    return GATEWAY_CLOSE_CODE_CODES[code] ?? "CONNECTION_FAILED";
+  }
+
+  function connectionFailureMessage(code: string, detail?: unknown): string {
+    const messages = CONNECTION_FAILURE_MESSAGES;
+    const normalized = normalizedClientErrorCode(code);
+    if (messages[normalized]) return messages[normalized];
+    const safeCode = safeClientErrorCode(normalized);
+    const safeDetail = safeClientErrorDetail(detail);
+    // The gateway classifies a refused nickname before it reaches the browser,
+    // but translate the raw TeamSpeak signature too: a nickname problem must
+    // never end up as the generic "check your network" fallback.
+    if (safeDetail && NICKNAME_LENGTH_SIGNATURE.test(safeDetail)) return NICKNAME_LENGTH_MESSAGE;
+    return `TeamSpeak 连接失败（错误代码：${safeCode}）${safeDetail ? `：${safeDetail}` : ""}，请检查输入、网络或服务器状态`;
+  }
+
+  function closeReason(code: number, reason = ""): string {
+    const failureCode = closeErrorCode(code, reason);
+    if (code === 4004 && failureCode === "SERVER_REJECTED") return "服务器当前已满或拒绝了连接，请稍后重试";
+    return connectionFailureMessage(failureCode);
   }
 
   function disconnect(preserveConnection = false): void {
@@ -1262,6 +1612,8 @@ export function useVoiceWebSocket() {
     const keepRememberedIdentity = lastConnection?.rememberIdentity === true;
     if (!preserveConnection) lastConnection = null;
     stopMicrophone();
+    clearMicrophoneError();
+    clearAudioNotice();
     const socket = ws.value;
     ws.value = null;
     stopWebRtcTransport();
@@ -1330,17 +1682,13 @@ export function useVoiceWebSocket() {
           const start = msg.webrtcAvailable === true && typeof RTCPeerConnection !== "undefined"
             ? (ws.value ? startWebRtcTransport(connectionSequence, ws.value) : Promise.resolve())
             : ensureMicrophone();
-          start.catch((error: unknown) => {
-            state.error = `麦克风访问失败：${error instanceof Error ? error.message : "请检查浏览器权限"}`;
-          });
+          // A failed microphone must not look like a failed connection: record it
+          // as an audio diagnostic so the room stays visible with a clear reason.
+          start.catch((error: unknown) => { setMicrophoneError(error); });
         } else if (msg.webrtcAvailable === true && typeof RTCPeerConnection !== "undefined" && ws.value) {
-          void startWebRtcTransport(connectionSequence, ws.value).catch((error: unknown) => {
-            state.error = `麦克风访问失败：${error instanceof Error ? error.message : "请检查浏览器权限"}`;
-          });
+          void startWebRtcTransport(connectionSequence, ws.value).catch((error: unknown) => { setMicrophoneError(error); });
         } else {
-          void ensureMicrophone().catch((error: unknown) => {
-            state.error = `麦克风访问失败：${error instanceof Error ? error.message : "请检查浏览器权限"}`;
-          });
+          void ensureMicrophone().catch((error: unknown) => { setMicrophoneError(error); });
         }
         break;
       case "memberEnter":
@@ -1451,7 +1799,20 @@ export function useVoiceWebSocket() {
         state.connecting = false;
         state.reconnecting = false;
         state.reconnectFailed = true;
-        state.error = "连接已中断，无法自动恢复";
+        state.errorCode = normalizedClientErrorCode(msg.code);
+        state.error = connectionFailureMessage(state.errorCode, msg.detail);
+        whisperTargetIds.clear();
+        whisperActive.value = false;
+        break;
+      case "connectionFailed":
+        state.connected = false;
+        state.connecting = false;
+        state.reconnecting = false;
+        // This is the first connection attempt, not a failed reconnect. Keep
+        // the user on the welcome form instead of showing an empty voice room.
+        state.reconnectFailed = false;
+        state.errorCode = normalizedClientErrorCode(msg.code);
+        state.error = connectionFailureMessage(state.errorCode, msg.detail);
         whisperTargetIds.clear();
         whisperActive.value = false;
         break;
@@ -1462,8 +1823,15 @@ export function useVoiceWebSocket() {
         void applyWebRtcAnswer(msg.payload?.sdp);
         break;
       case "webrtcError":
-        if (ws.value) void fallbackFromWebRtc(connectionSequence, ws.value);
+        if (ws.value) void fallbackFromWebRtc(connectionSequence, ws.value, safeClientErrorCode(msg.code) || "WEBRTC_NEGOTIATION_FAILED");
         break;
+      case "audioError": {
+        // The gateway could not encode our microphone audio (for example its Opus
+        // encoder is unavailable): say it instead of dropping frames silently.
+        const audioCode = safeClientErrorCode(msg.code) || "AUDIO_ERROR";
+        setAudioNotice(audioCode, audioNoticeMessage(audioCode, msg.detail));
+        break;
+      }
       case "voiceActivity":
         if (Array.isArray(msg.clientIds)) {
           for (const clientId of msg.clientIds) {
@@ -1472,7 +1840,7 @@ export function useVoiceWebSocket() {
         }
         break;
       case "error":
-        state.errorCode = String(msg.error?.code || "");
+        state.errorCode = normalizedClientErrorCode(msg.error?.code, "OPERATION_FAILED");
         state.error = protocolErrorMessage(state.errorCode, String(msg.error?.message || msg.message || "操作失败"));
         break;
     }
@@ -1579,7 +1947,7 @@ export function useVoiceWebSocket() {
 
   function reconnectNow(): void {
     if (!lastConnection || state.connecting) return;
-    connect(lastConnection.target, lastConnection.channel, lastConnection.nickname, lastConnection.serverPassword, lastConnection.rememberIdentity ? identityMaterial.value || lastConnection.identity : "", lastConnection.rememberIdentity);
+    connect(lastConnection.target, lastConnection.channel, lastConnection.nickname, lastConnection.serverPassword, lastConnection.rememberIdentity ? identityMaterial.value || lastConnection.identity : "", lastConnection.rememberIdentity, "", lastConnection.accelerated, lastConnection.accelerationRelayId);
   }
 
   function setMicrophoneMuted(muted: boolean): void {
@@ -1620,11 +1988,20 @@ export function useVoiceWebSocket() {
       CHANNEL_SWITCH_FAILED: "频道切换失败",
       CHANNEL_PASSWORD_REQUIRED: "该频道需要密码",
       CHANNEL_FULL: "该频道已满",
+      NICKNAME_IN_USE: "该昵称已被占用，请更换昵称",
+      CLIENT_VERSION_OUTDATED: "客户端版本过旧，服务器拒绝了该操作",
+      FLOOD_PROTECTION: "操作过于频繁，请稍后重试",
+      BANNED: "你已被该服务器封禁",
+      KICKED: "你已被服务器移出",
       PERMISSION_DENIED: "你没有执行此操作的权限",
       CLIENT_NOT_FOUND: "成员已离线",
       OPERATION_FAILED: "操作失败",
     };
-    return messages[code] || fallback;
+    const normalized = normalizedClientErrorCode(code, "OPERATION_FAILED");
+    if (messages[normalized]) return messages[normalized];
+    const safeCode = safeClientErrorCode(normalized);
+    const safeFallback = safeClientErrorDetail(fallback);
+    return `操作失败（错误代码：${safeCode}）${safeFallback ? `：${safeFallback}` : ""}`;
   }
 
   function setVolume(clientId: number, volume: number): void {
@@ -1654,6 +2031,21 @@ export function useVoiceWebSocket() {
     if (micGain) micGain.gain.value = inputVolume.value;
     if (webrtcMixMicGain) webrtcMixMicGain.gain.value = microphoneMuted.value ? 0 : inputVolume.value;
     void saveAudioPreferences();
+  }
+
+  async function setNoiseSuppressionEnabled(enabled: boolean): Promise<void> {
+    if (noiseSuppressionEnabled.value === enabled) return;
+    const shouldRestartWebRtc = webrtcActive.value && Boolean(ws.value);
+    noiseSuppressionEnabled.value = enabled;
+    void saveAudioPreferences();
+    if (!micStream) return;
+    try {
+      if (shouldRestartWebRtc) stopWebRtcTransport();
+      await startMicrophone();
+      if (shouldRestartWebRtc && ws.value) await startWebRtcTransport(connectionSequence, ws.value);
+    } catch (error) {
+      setMicrophoneError(error);
+    }
   }
 
   function setOutputVolume(volume: number): void {
@@ -1695,6 +2087,7 @@ export function useVoiceWebSocket() {
     pttKey,
     echoCancellation,
     noiseSuppression,
+    noiseSuppressionEnabled,
     autoGainControl,
     inputVolume,
     outputVolume,
@@ -1707,6 +2100,7 @@ export function useVoiceWebSocket() {
     selectedOutputDeviceId,
     outputDeviceSupported,
     audioPermission,
+    microphoneProcessing,
     audioContextState,
     identityMaterial,
     micLevel,
@@ -1721,6 +2115,7 @@ export function useVoiceWebSocket() {
     accompanimentErrorCode,
     setVolume,
     setInputVolume,
+    setNoiseSuppressionEnabled,
     setOutputVolume,
     toggleOutputMute,
     setVoxThreshold,
@@ -1748,6 +2143,7 @@ export function useVoiceWebSocket() {
     setWhisperTargets,
     setWhisperActive,
     setMicrophoneMuted,
+    ensureMicrophone,
     startAccompaniment,
     stopAccompaniment,
     checkSupport,
